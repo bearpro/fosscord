@@ -23,6 +23,10 @@ export function saveIdentity(identity: IdentityRecord): void {
 	localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity));
 }
 
+export function clearIdentity(): void {
+	localStorage.removeItem(IDENTITY_KEY);
+}
+
 export function loadServers(): SavedServer[] {
 	return safeParseJSON<SavedServer[]>(localStorage.getItem(SERVERS_KEY)) ?? [];
 }
@@ -47,4 +51,15 @@ export function upsertServer(server: SavedServer): SavedServer[] {
 
 export function getServerByID(serverID: string): SavedServer | null {
 	return loadServers().find((server) => server.id === serverID) ?? null;
+}
+
+export function removeServerByID(serverID: string): SavedServer[] {
+	const filtered = loadServers().filter((server) => server.id !== serverID);
+	saveServers(filtered);
+	return filtered;
+}
+
+export function resetLocalState(): void {
+	clearIdentity();
+	localStorage.removeItem(SERVERS_KEY);
 }

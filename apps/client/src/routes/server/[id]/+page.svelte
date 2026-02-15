@@ -23,7 +23,13 @@
 	} from '$lib/api';
 	import { createAdminInviteSignature, createAdminListInvitesSignature } from '$lib/crypto';
 	import { renderMarkdown } from '$lib/markdown';
-	import { getServerByID, loadIdentity, upsertServer } from '$lib/storage';
+	import {
+		getServerByID,
+		loadIdentity,
+		removeServerByID,
+		resetLocalState,
+		upsertServer
+	} from '$lib/storage';
 	import type { Channel, IdentityRecord, SavedServer } from '$lib/types';
 	import { Room, RoomEvent, Track, type RemoteTrack, type RemoteTrackPublication } from 'livekit-client';
 
@@ -109,6 +115,55 @@
 			streamSocket.close();
 			streamSocket = null;
 		}
+	}
+
+	async function handleForgetServer() {
+		if (!server) {
+			return;
+		}
+
+		if (
+			typeof window !== 'undefined' &&
+			!window.confirm(`Forget server "${server.name}" and remove local connection state?`)
+		) {
+			return;
+		}
+
+		await disconnectVoiceChannel();
+		closeStream();
+		removeServerByID(server.id);
+
+		server = null;
+		channels = [];
+		adminPublicKeys = [];
+		textMessages = [];
+		voiceParticipants = [];
+
+		await goto('/');
+	}
+
+	async function handleResetLocalState() {
+		if (
+			typeof window !== 'undefined' &&
+			!window.confirm(
+				'Reset local state? This will remove your client identity and all saved servers from this device.'
+			)
+		) {
+			return;
+		}
+
+		await disconnectVoiceChannel();
+		closeStream();
+		resetLocalState();
+
+		identity = null;
+		server = null;
+		channels = [];
+		adminPublicKeys = [];
+		textMessages = [];
+		voiceParticipants = [];
+
+		await goto('/');
 	}
 
 	function shortKey(value: string): string {
@@ -1034,6 +1089,10 @@
 				</p>
 				{#if !server.sessionToken}
 					<p class="error">Missing session token. Reconnect using an invite link.</p>
+					<div class="actions-row">
+						<button class="ghost" on:click={handleForgetServer}>Leave server</button>
+						<button class="danger" on:click={handleResetLocalState}>Reset local state</button>
+					</div>
 				{:else}
 					<section class="chat-shell">
 						<div class="message-list">
@@ -1104,6 +1163,10 @@
 
 				{#if !server.sessionToken}
 					<p class="error">Missing session token. Reconnect using an invite link.</p>
+					<div class="actions-row">
+						<button class="ghost" on:click={handleForgetServer}>Leave server</button>
+						<button class="danger" on:click={handleResetLocalState}>Reset local state</button>
+					</div>
 				{:else}
 					<section class="card">
 						<h3>Voice Controls</h3>
@@ -1360,6 +1423,10 @@
 
 	button.ghost {
 		background: #25304a;
+	}
+
+	button.danger {
+		background: #8e2a3f;
 	}
 
 	button:disabled {
