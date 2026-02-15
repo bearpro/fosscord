@@ -25,8 +25,12 @@ apps/client/src-tauri/target/
 
 # go
 apps/server/bin/
+apps/server/data/
 *.test
 *.out
 
 # misc
 .DS_Store
+
+# Local pnpm store for nested e2e project
+tests/e2e-node/.pnpm-store/

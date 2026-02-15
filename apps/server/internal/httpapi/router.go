@@ -4,13 +4,14 @@ import (
 	"net/http"
 
 	"fosscord/apps/server/internal/config"
+	"fosscord/apps/server/internal/serverstate"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 )
 
-func NewRouter(cfg config.Config) http.Handler {
-	h := handlers{cfg: cfg}
+func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
+	h := handlers{cfg: cfg, state: state}
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -34,6 +35,12 @@ func NewRouter(cfg config.Config) http.Handler {
 	r.Get("/health", h.getHealth)
 	r.Route("/api", func(api chi.Router) {
 		api.Get("/server-info", h.getServerInfo)
+		api.Get("/channels", h.getChannels)
+		api.Post("/connect/begin", h.postConnectBegin)
+		api.Post("/connect/finish", h.postConnectFinish)
+		api.Route("/admin", func(admin chi.Router) {
+			admin.Post("/invites", h.postAdminInvites)
+		})
 		api.Post("/livekit/token", h.postLiveKitToken)
 	})
 

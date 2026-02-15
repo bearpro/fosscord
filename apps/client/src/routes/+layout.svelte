@@ -5,8 +5,8 @@
 <div class="app-shell">
 	<header>
 		<nav>
-			<a href="/">Servers</a>
-			<a href="/server">Server Home</a>
+			<a href="/servers">Servers</a>
+			<a href="/setup">Identity</a>
 		</nav>
 	</header>
 
@@ -19,16 +19,16 @@
 	:global(body) {
 		margin: 0;
 		font-family:
-			"Iosevka",
-			"JetBrains Mono",
-			"Fira Code",
+			'Iosevka',
+			'JetBrains Mono',
+			'Fira Code',
 			monospace;
 		background: linear-gradient(180deg, #f7f9fc 0%, #edf3fb 100%);
 		color: #1f2937;
 	}
 
 	.app-shell {
-		max-width: 960px;
+		max-width: 1080px;
 		margin: 0 auto;
 		padding: 24px;
 	}

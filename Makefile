@@ -100,5 +100,25 @@ test-integration: ensure-test-env
 	$(TEST_COMPOSE) exec -T server sh -c "cd /workspace && API_BASE_URL=http://127.0.0.1:8080 go test ./... -tags=integration"
 
 test-e2e: ensure-test-env
-	@set -a; . "$(TEST_ENV_FILE)"; set +a; \
+	@set -euo pipefail; \
+	set -a; . "$(TEST_ENV_FILE)"; set +a; \
+	tmp_bin="$$(mktemp /tmp/fosscord-e2e-server.XXXXXX)"; \
+	tmp_data_dir="$$(mktemp -d /tmp/fosscord-e2e-data.XXXXXX)"; \
+	cleanup() { \
+		if [ -n "$${server_pid:-}" ]; then kill "$$server_pid" >/dev/null 2>&1 || true; fi; \
+		rm -f "$$tmp_bin"; \
+		rm -rf "$$tmp_data_dir"; \
+	}; \
+	trap cleanup EXIT; \
+	(cd apps/server && go build -o "$$tmp_bin" ./cmd/server); \
+	SERVER_ADDR=":18080" \
+	DATA_DIR="$$tmp_data_dir" \
+	SERVER_PUBLIC_BASE_URL="http://127.0.0.1:18080" \
+	ADMIN_TOKEN="$${ADMIN_TOKEN:-devadmin}" \
+	LIVEKIT_URL="$${LIVEKIT_PUBLIC_URL:-http://127.0.0.1:7880}" \
+	"$$tmp_bin" >/tmp/fosscord-e2e-server.log 2>&1 & \
+	server_pid="$$!"; \
+	./scripts/wait-http.sh "http://127.0.0.1:18080/health" "$${WAIT_TIMEOUT:-60}" "e2e backend health"; \
+	E2E_API_BASE_URL="http://127.0.0.1:18080" \
+	E2E_LIVEKIT_URL="$${LIVEKIT_PUBLIC_URL:-http://127.0.0.1:7880}" \
 	pnpm --dir tests/e2e-node test

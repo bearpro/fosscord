@@ -31,14 +31,23 @@ services:
       SERVER_ADDR: ":8080"
       SERVER_NAME: "Local Server"
       SERVER_PUBLIC_KEY_FINGERPRINT_EMOJI: ":lock::satellite:"
+      DATA_DIR: "/workspace/data"
+      DB_PATH: "${DB_PATH:-server.db}"
+      ADMIN_TOKEN: "${ADMIN_TOKEN:-devadmin}"
+      SERVER_PUBLIC_BASE_URL: "${API_BASE_URL:-http://localhost:8080}"
       LIVEKIT_URL: "${LIVEKIT_URL:-http://livekit:7880}"
       LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:-devkey}"
       LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-devsecret}"
     ports:
       - "${SERVER_HTTP_PORT:-8080}:8080"
+    volumes:
+      - server_test_data:/workspace/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null || exit 1"]
       interval: 2s
       timeout: 2s
       retries: 30
       start_period: 2s
+
+volumes:
+  server_test_data:
