@@ -3,7 +3,7 @@
 	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 	import AddServerModal from '$lib/components/AddServerModal.svelte';
-	import { IS_SINGLE_SERVER_WEB_MODE } from '$lib/runtime';
+	import { IS_SINGLE_SERVER_WEB_MODE, SINGLE_SERVER_BASE_URL } from '$lib/runtime';
 	import { loadIdentity, loadServers, upsertServer } from '$lib/storage';
 	import type { IdentityRecord, SavedServer } from '$lib/types';
 
@@ -57,7 +57,7 @@
 
 	$: activeServerID = $page.params.id ?? '';
 	$: showServerRail = !IS_SINGLE_SERVER_WEB_MODE && identity !== null;
-	$: showAddServer = showServerRail && !$page.url.pathname.startsWith('/setup');
+	$: showAddServer = identity !== null && !$page.url.pathname.startsWith('/setup');
 </script>
 
 <svelte:head>
@@ -98,6 +98,11 @@
 		<footer class="status-bar">
 			<span class="status-label">Client Public Key:</span>
 			<code title={identity?.publicKey ?? ''}>{shortenPublicKey(identity?.publicKey ?? '')}</code>
+			{#if showAddServer && !showServerRail}
+				<div class="status-actions">
+					<button class="add-server-btn" on:click={() => (addServerOpen = true)}>Add server</button>
+				</div>
+			{/if}
 		</footer>
 	</div>
 </div>
@@ -106,6 +111,7 @@
 	<AddServerModal
 		open={addServerOpen}
 		{identity}
+		allowedBaseURL={IS_SINGLE_SERVER_WEB_MODE ? SINGLE_SERVER_BASE_URL : null}
 		on:close={() => (addServerOpen = false)}
 		on:connected={handleConnected}
 	/>
@@ -205,6 +211,21 @@
 		gap: 10px;
 		align-items: center;
 		min-width: 0;
+	}
+
+	.status-actions {
+		margin-left: auto;
+		display: flex;
+		gap: 8px;
+	}
+
+	.add-server-btn {
+		padding: 6px 10px;
+		border: 0;
+		border-radius: 8px;
+		background: #2f63ff;
+		color: #fff;
+		cursor: pointer;
 	}
 
 	.status-label {

@@ -60,6 +60,13 @@ type connectBeginRequest struct {
 	InviteID string `json:"inviteId"`
 }
 
+type connectAdminRequest struct {
+	AdminPublicKey string                 `json:"adminPublicKey"`
+	IssuedAt       string                 `json:"issuedAt"`
+	Signature      string                 `json:"signature"`
+	ClientInfo     serverstate.ClientInfo `json:"clientInfo"`
+}
+
 type createMessageRequest struct {
 	ContentMarkdown string `json:"contentMarkdown"`
 }
@@ -207,6 +214,27 @@ func (h handlers) postConnectFinish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.state.FinishConnect(req)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h handlers) postConnectAdmin(w http.ResponseWriter, r *http.Request) {
+	var req connectAdminRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAPIError(w, &serverstate.APIError{Status: http.StatusBadRequest, Code: "invalid_json", Message: err.Error()})
+		return
+	}
+
+	result, err := h.state.AdminConnect(serverstate.AdminConnectRequest{
+		AdminPublicKey: req.AdminPublicKey,
+		IssuedAt:       req.IssuedAt,
+		Signature:      req.Signature,
+		ClientInfo:     req.ClientInfo,
+	})
 	if err != nil {
 		writeAPIError(w, err)
 		return

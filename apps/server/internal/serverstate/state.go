@@ -78,6 +78,13 @@ type ListInvitesByAdminClientRequest struct {
 	Signature      string
 }
 
+type AdminConnectRequest struct {
+	AdminPublicKey string
+	IssuedAt       string
+	Signature      string
+	ClientInfo     ClientInfo
+}
+
 type InviteSummary struct {
 	InviteID               string  `json:"inviteId"`
 	AllowedClientPublicKey string  `json:"allowedClientPublicKey"`
@@ -383,6 +390,67 @@ func (s *State) ListInvitesByAdminClient(req ListInvitesByAdminClientRequest) (L
 	return result, nil
 }
 
+func (s *State) AdminConnect(req AdminConnectRequest) (FinishResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	req.AdminPublicKey = strings.TrimSpace(req.AdminPublicKey)
+	req.IssuedAt = strings.TrimSpace(req.IssuedAt)
+	req.Signature = strings.TrimSpace(req.Signature)
+
+	if req.AdminPublicKey == "" || req.IssuedAt == "" || req.Signature == "" {
+		return FinishResult{}, newAPIError(400, "invalid_request", "adminPublicKey, issuedAt and signature are required")
+	}
+
+	adminKey, err := decodePublicKey(req.AdminPublicKey)
+	if err != nil {
+		return FinishResult{}, newAPIError(400, "invalid_admin_public_key", "adminPublicKey must be base64(ed25519 public key)")
+	}
+	if !s.isAdminPublicKeyLocked(req.AdminPublicKey) {
+		return FinishResult{}, newAPIError(403, "admin_forbidden", "client is not an administrator")
+	}
+
+	issuedAt, err := time.Parse(time.RFC3339, req.IssuedAt)
+	if err != nil {
+		return FinishResult{}, newAPIError(400, "invalid_issued_at", "issuedAt must be RFC3339")
+	}
+	if time.Since(issuedAt.UTC()) > adminRequestMaxSkew || time.Until(issuedAt.UTC()) > adminRequestMaxSkew {
+		return FinishResult{}, newAPIError(401, "stale_request", "issuedAt is outside allowed skew")
+	}
+
+	signature, err := decodeSignature(req.Signature)
+	if err != nil {
+		return FinishResult{}, newAPIError(400, "invalid_signature", "signature must be base64(ed25519 signature)")
+	}
+
+	hash := AdminConnectPayloadHash(req.AdminPublicKey, req.IssuedAt, s.serverFingerprint)
+	if !ed25519.Verify(adminKey, hash[:], signature) {
+		return FinishResult{}, newAPIError(401, "invalid_signature", "signature verification failed")
+	}
+
+	displayName := normalizeDisplayName(req.ClientInfo.DisplayName, req.AdminPublicKey)
+	if err := s.upsertMemberLocked(req.AdminPublicKey, displayName); err != nil {
+		return FinishResult{}, err
+	}
+
+	sessionToken, err := s.issueSessionTokenLocked(req.AdminPublicKey)
+	if err != nil {
+		return FinishResult{}, err
+	}
+
+	channels := make([]Channel, len(s.serverCfg.Channels))
+	copy(channels, s.serverCfg.Channels)
+
+	return FinishResult{
+		ServerID:          s.serverID,
+		ServerName:        s.serverCfg.ServerName,
+		ServerFingerprint: s.serverFingerprint,
+		LiveKitURL:        s.cfg.LiveKitURL,
+		Channels:          channels,
+		SessionToken:      sessionToken,
+	}, nil
+}
+
 func (s *State) createInviteLocked(clientPublicKeyB64, label string) (CreateInviteResult, error) {
 	inviteID, err := randomHex(16)
 	if err != nil {
@@ -600,6 +668,14 @@ func AdminListInvitesPayloadHash(adminPublicKey, issuedAt string) [32]byte {
 	payload := make([]byte, 0, len(adminPublicKey)+len(issuedAt))
 	payload = append(payload, []byte(adminPublicKey)...)
 	payload = append(payload, []byte(issuedAt)...)
+	return sha256.Sum256(payload)
+}
+
+func AdminConnectPayloadHash(adminPublicKey, issuedAt, serverFingerprint string) [32]byte {
+	payload := make([]byte, 0, len(adminPublicKey)+len(issuedAt)+len(serverFingerprint))
+	payload = append(payload, []byte(adminPublicKey)...)
+	payload = append(payload, []byte(issuedAt)...)
+	payload = append(payload, []byte(serverFingerprint)...)
 	return sha256.Sum256(payload)
 }
 

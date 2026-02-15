@@ -30,6 +30,15 @@ export type ConnectFinishResponse = {
 	sessionToken?: string;
 };
 
+export type AdminConnectRequest = {
+	adminPublicKey: string;
+	issuedAt: string;
+	signature: string;
+	clientInfo?: {
+		displayName?: string;
+	};
+};
+
 export type ChannelsResponse = {
 	channels: Channel[];
 };
@@ -201,6 +210,18 @@ export function connectFinish(
 	return requestJSON<ConnectFinishResponse>({
 		baseUrl,
 		path: '/api/connect/finish',
+		method: 'POST',
+		body: request
+	});
+}
+
+export function connectAdmin(
+	request: AdminConnectRequest,
+	baseUrl?: string
+): Promise<ConnectFinishResponse> {
+	return requestJSON<ConnectFinishResponse>({
+		baseUrl,
+		path: '/api/connect/admin',
 		method: 'POST',
 		body: request
 	});

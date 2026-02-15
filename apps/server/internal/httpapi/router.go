@@ -49,6 +49,7 @@ func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
 		})
 		api.Post("/connect/begin", h.postConnectBegin)
 		api.Post("/connect/finish", h.postConnectFinish)
+		api.Post("/connect/admin", h.postConnectAdmin)
 		api.Route("/admin", func(admin chi.Router) {
 			admin.Post("/invites", h.postAdminInvites)
 			admin.Post("/invites/client-signed", h.postAdminInvitesClientSigned)

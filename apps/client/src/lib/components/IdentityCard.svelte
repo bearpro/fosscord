@@ -8,7 +8,8 @@
 	<h2>{title}</h2>
 	<p class="fingerprint">{fingerprint || 'n/a'}</p>
 	{#if publicKey}
-		<p class="meta">Public key: {publicKey}</p>
+		<p class="label">Public Key</p>
+		<code class="key">{publicKey}</code>
 	{/if}
 </section>
 
@@ -16,19 +17,38 @@
 	.identity-card {
 		padding: 16px;
 		border-radius: 12px;
-		background: #ffffff;
-		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+		background: #151c2b;
+		border: 1px solid #2f3c58;
+	}
+
+	h2 {
+		margin: 0;
+		color: #e7eefc;
+		font-size: 18px;
 	}
 
 	.fingerprint {
 		font-size: 24px;
-		margin: 8px 0;
+		margin: 10px 0;
 	}
 
-	.meta {
+	.label {
+		margin: 0 0 6px;
+		color: #9fb1cf;
+		font-size: 12px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.key {
+		display: block;
+		padding: 10px;
+		border-radius: 8px;
+		background: #0f1521;
+		border: 1px solid #2f3c58;
 		margin: 0;
 		font-size: 12px;
 		word-break: break-all;
-		color: #334155;
+		color: #d3dff6;
 	}
 </style>

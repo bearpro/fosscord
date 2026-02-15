@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import { getServerInfo, type ServerInfo } from '$lib/api';
+	import { connectAdmin, getServerInfo, type ServerInfo } from '$lib/api';
 	import AddServerModal from '$lib/components/AddServerModal.svelte';
-	import { generateIdentity } from '$lib/crypto';
+	import { createAdminSessionSignature, generateIdentity } from '$lib/crypto';
 	import { IS_SINGLE_SERVER_WEB_MODE, SINGLE_SERVER_BASE_URL } from '$lib/runtime';
 	import { loadIdentity, saveIdentity, upsertServer } from '$lib/storage';
 	import type { IdentityRecord, SavedServer } from '$lib/types';
@@ -16,6 +16,7 @@
 
 	let addServerOpen = false;
 	let connectResult = '';
+	let autoLoginInProgress = false;
 
 	onMount(async () => {
 		if (!IS_SINGLE_SERVER_WEB_MODE) {
@@ -36,10 +37,60 @@
 		error = '';
 		try {
 			serverInfo = await getServerInfo(SINGLE_SERVER_BASE_URL);
+			await tryAutoAdminConnect(serverInfo);
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load server info';
 		} finally {
 			loadingServerInfo = false;
+		}
+	}
+
+	async function tryAutoAdminConnect(info: ServerInfo) {
+		if (!identity || autoLoginInProgress) {
+			return;
+		}
+		if (!info.adminPublicKeys.includes(identity.publicKey)) {
+			return;
+		}
+
+		autoLoginInProgress = true;
+		try {
+			const issuedAt = new Date().toISOString();
+			const signature = await createAdminSessionSignature({
+				adminPublicKey: identity.publicKey,
+				issuedAt,
+				serverFingerprint: info.serverFingerprint,
+				adminPrivateKeyBase64: identity.privateKey
+			});
+
+			const result = await connectAdmin(
+				{
+					adminPublicKey: identity.publicKey,
+					issuedAt,
+					signature,
+					clientInfo: {
+						displayName: 'Web Admin'
+					}
+				},
+				SINGLE_SERVER_BASE_URL
+			);
+
+			upsertServer({
+				id: result.serverId,
+				name: result.serverName,
+				baseUrl: SINGLE_SERVER_BASE_URL,
+				serverFingerprint: result.serverFingerprint,
+				livekitUrl: result.livekitUrl,
+				sessionToken: result.sessionToken,
+				channels: result.channels,
+				lastConnectedAt: new Date().toISOString()
+			});
+
+			void goto(`/server/${result.serverId}`);
+		} catch {
+			// Keep non-blocking UX for admins if auto-login fails.
+		} finally {
+			autoLoginInProgress = false;
 		}
 	}
 
@@ -95,6 +146,9 @@
 			<div class="actions">
 				<button on:click={() => (addServerOpen = true)}>Connect via invite link</button>
 			</div>
+			{#if autoLoginInProgress}
+				<p>Logging in as administrator...</p>
+			{/if}
 			{#if connectResult}
 				<p>{connectResult}</p>
 			{/if}
@@ -113,23 +167,33 @@
 {/if}
 
 <style>
+	h1 {
+		margin: 0;
+	}
+
+	p {
+		color: #9fb1cf;
+	}
+
 	.card {
 		padding: 16px;
 		border-radius: 12px;
-		background: #ffffff;
-		box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+		background: #151c2b;
+		border: 1px solid #2f3c58;
 		margin: 16px 0;
 	}
 
 	.message {
 		font-weight: 600;
+		color: #f2f7ff;
 	}
 
 	.pubkey {
 		display: block;
 		padding: 12px;
 		border-radius: 8px;
-		background: #f1f5f9;
+		background: #0f1521;
+		border: 1px solid #2f3c58;
 		word-break: break-all;
 	}
 
@@ -137,7 +201,7 @@
 		padding: 8px 12px;
 		border: 0;
 		border-radius: 8px;
-		background: #0f4c81;
+		background: #2f63ff;
 		color: white;
 		cursor: pointer;
 	}
@@ -154,6 +218,6 @@
 	}
 
 	.error {
-		color: #b91c1c;
+		color: #ff7d7d;
 	}
 </style>

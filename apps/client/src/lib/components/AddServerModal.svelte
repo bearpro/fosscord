@@ -111,26 +111,43 @@
 	.overlay {
 		position: fixed;
 		inset: 0;
-		background: rgba(15, 23, 42, 0.45);
+		background: rgba(4, 8, 14, 0.72);
 		display: grid;
 		place-items: center;
 		padding: 16px;
+		z-index: 80;
 	}
 
 	.modal {
 		width: min(680px, 100%);
-		background: #ffffff;
+		background: #151c2b;
+		border: 1px solid #2f3c58;
 		border-radius: 12px;
 		padding: 16px;
-		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.2);
+		box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+		color: #e7eefc;
+	}
+
+	h2 {
+		margin: 0 0 8px;
+	}
+
+	p {
+		margin: 0 0 10px;
+		color: #9fb1cf;
 	}
 
 	textarea {
 		width: 100%;
 		box-sizing: border-box;
 		margin-top: 8px;
-		padding: 8px;
+		padding: 10px;
 		font-family: inherit;
+		background: #0f1521;
+		border: 1px solid #2f3c58;
+		border-radius: 8px;
+		color: #e7eefc;
+		resize: vertical;
 	}
 
 	.actions {
@@ -144,13 +161,13 @@
 		padding: 8px 12px;
 		border: 0;
 		border-radius: 8px;
-		background: #0f4c81;
+		background: #2f63ff;
 		color: white;
 		cursor: pointer;
 	}
 
 	button:first-child {
-		background: #475569;
+		background: #25304a;
 	}
 
 	button:disabled {
@@ -159,6 +176,7 @@
 	}
 
 	.error {
-		color: #b91c1c;
+		color: #ff7d7d;
+		margin-top: 10px;
 	}
 </style>

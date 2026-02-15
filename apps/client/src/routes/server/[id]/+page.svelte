@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { onDestroy, onMount } from 'svelte';
 	import {
+		connectAdmin,
 		createChannelMessage,
 		createInviteByClient,
 		createLiveKitVoiceToken,
@@ -21,7 +22,11 @@
 		type InviteSummary,
 		type VoiceParticipant
 	} from '$lib/api';
-	import { createAdminInviteSignature, createAdminListInvitesSignature } from '$lib/crypto';
+	import {
+		createAdminInviteSignature,
+		createAdminListInvitesSignature,
+		createAdminSessionSignature
+	} from '$lib/crypto';
 	import { renderMarkdown } from '$lib/markdown';
 	import {
 		getServerByID,
@@ -90,6 +95,7 @@
 
 	let initialized = false;
 	let activeServerID = '';
+	let autoAdminLoginInProgress = false;
 
 	$: currentView = $page.url.searchParams.get('view') ?? 'channel';
 	$: currentChannelID = $page.url.searchParams.get('channel') ?? '';
@@ -787,6 +793,11 @@
 				channels,
 				lastConnectedAt: new Date().toISOString()
 			};
+
+			if (!server.sessionToken) {
+				await tryAutoAdminLogin(serverInfo.serverFingerprint);
+			}
+
 			upsertServer(server);
 
 			if (currentView !== 'admin' && !currentChannelID && channels.length > 0) {
@@ -799,6 +810,58 @@
 			error = e instanceof Error ? e.message : 'Unknown error';
 		} finally {
 			loading = false;
+		}
+	}
+
+	async function tryAutoAdminLogin(serverFingerprint: string) {
+		if (!server || !identity || autoAdminLoginInProgress) {
+			return;
+		}
+		if (server.sessionToken) {
+			return;
+		}
+		if (!adminPublicKeys.includes(identity.publicKey)) {
+			return;
+		}
+
+		autoAdminLoginInProgress = true;
+		try {
+			const issuedAt = new Date().toISOString();
+			const signature = await createAdminSessionSignature({
+				adminPublicKey: identity.publicKey,
+				issuedAt,
+				serverFingerprint,
+				adminPrivateKeyBase64: identity.privateKey
+			});
+
+			const result = await connectAdmin(
+				{
+					adminPublicKey: identity.publicKey,
+					issuedAt,
+					signature,
+					clientInfo: {
+						displayName: 'Admin Client'
+					}
+				},
+				server.baseUrl
+			);
+
+			channels = result.channels;
+			server = {
+				...server,
+				id: result.serverId,
+				name: result.serverName,
+				serverFingerprint: result.serverFingerprint,
+				livekitUrl: result.livekitUrl,
+				sessionToken: result.sessionToken,
+				channels: result.channels,
+				lastConnectedAt: new Date().toISOString()
+			};
+			upsertServer(server);
+		} catch {
+			// Keep normal pre-login behavior when admin auto-login fails.
+		} finally {
+			autoAdminLoginInProgress = false;
 		}
 	}
 
