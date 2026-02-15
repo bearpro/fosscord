@@ -1,0 +1,32 @@
+# env
+.env
+.env.*
+!.env.example
+deploy/.env.test
+!deploy/.env.test.example
+
+# node
+node_modules/
+apps/client/node_modules/
+apps/client/.svelte-kit/
+apps/client/build/
+apps/client/dist/
+apps/client/.vite/
+tests/e2e-node/node_modules/
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+coverage/
+
+# rust / tauri
+.rustup/
+.cargo/
+apps/client/src-tauri/target/
+
+# go
+apps/server/bin/
+*.test
+*.out
+
+# misc
+.DS_Store
