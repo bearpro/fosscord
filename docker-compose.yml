@@ -9,7 +9,7 @@ services:
       - "3478:3478/udp"
       - "${LIVEKIT_RTC_PORT_RANGE_START:-50000}-${LIVEKIT_RTC_PORT_RANGE_END:-50010}:${LIVEKIT_RTC_PORT_RANGE_START:-50000}-${LIVEKIT_RTC_PORT_RANGE_END:-50010}/udp"
     environment:
-      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-devsecret}"
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-devsecret00000000000000000000000000000000}"
     volumes:
       - ./deploy/livekit.yaml:/livekit.yaml:ro
     healthcheck:
@@ -39,7 +39,7 @@ services:
       SERVER_PUBLIC_BASE_URL: "${SERVER_PUBLIC_BASE_URL:-http://localhost:8088}"
       LIVEKIT_URL: "${LIVEKIT_URL:-http://127.0.0.1:7880}"
       LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:-devkey}"
-      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-devsecret}"
+      LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-devsecret00000000000000000000000000000000}"
     volumes:
       - ./apps/server/data:/workspace/data
     healthcheck:
