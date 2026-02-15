@@ -54,16 +54,16 @@
             # Helps some crates find system libs on Nix
             LD_LIBRARY_PATH = libPath;
 
-            # If you use Rust toolchain via rustup, keep it in project dir:
-            RUSTUP_HOME = "\${PWD}/.rustup";
-            CARGO_HOME = "\${PWD}/.cargo";
-
             # Some crates call `cc`; point it at clang to reduce surprises
             CC = "clang";
             CXX = "clang++";
           };
 
           shellHook = ''
+            # Keep Rust toolchain caches inside the current project directory.
+            export RUSTUP_HOME="$PWD/.rustup"
+            export CARGO_HOME="$PWD/.cargo"
+
             echo "Dev shell: Tauri v2 + SvelteKit + Go"
             echo "Node: $(node -v 2>/dev/null || true) | pnpm: $(pnpm -v 2>/dev/null || true) | Go: $(go version 2>/dev/null || true)"
             echo "Tip: run 'rustup toolchain install stable' once (inside this shell)."
