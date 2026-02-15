@@ -11,7 +11,7 @@ services:
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-devsecret}"
     volumes:
-      - ./livekit.yaml:/livekit.yaml:ro
+      - ./deploy/livekit.yaml:/livekit.yaml:ro
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 7880 || exit 1"]
       interval: 2s
@@ -21,7 +21,7 @@ services:
 
   server:
     build:
-      context: ../apps/server
+      context: ./apps/server
       dockerfile: Dockerfile
     network_mode: host
     restart: unless-stopped
@@ -41,7 +41,7 @@ services:
       LIVEKIT_API_KEY: "${LIVEKIT_API_KEY:-devkey}"
       LIVEKIT_API_SECRET: "${LIVEKIT_API_SECRET:-devsecret}"
     volumes:
-      - ../apps/server/data:/workspace/data
+      - ./apps/server/data:/workspace/data
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health >/dev/null || exit 1"]
       interval: 2s
@@ -51,7 +51,7 @@ services:
 
   edge:
     build:
-      context: ..
+      context: .
       dockerfile: deploy/nginx/Dockerfile
       args:
         VITE_API_BASE_URL: "${VITE_API_BASE_URL:-/}"

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strings"
 
 	"fosscord/apps/server/internal/config"
 	"fosscord/apps/server/internal/serverstate"
@@ -24,6 +25,10 @@ func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
 			"http://127.0.0.1:1420",
 			"http://localhost:5173",
 			"http://127.0.0.1:5173",
+			"http://localhost:8088",
+			"http://127.0.0.1:8088",
+			"http://localhost:3000",
+			"http://127.0.0.1:3000",
 			"tauri://localhost",
 			"https://tauri.localhost",
 		},
@@ -40,9 +45,15 @@ func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
 		api.Post("/connect/finish", h.postConnectFinish)
 		api.Route("/admin", func(admin chi.Router) {
 			admin.Post("/invites", h.postAdminInvites)
+			admin.Post("/invites/client-signed", h.postAdminInvitesClientSigned)
 		})
 		api.Post("/livekit/token", h.postLiveKitToken)
 	})
+
+	if strings.TrimSpace(cfg.WebDistDir) != "" {
+		r.Get("/", h.serveWebApp)
+		r.Get("/*", h.serveWebApp)
+	}
 
 	return r
 }

@@ -23,12 +23,13 @@ type healthResponse struct {
 }
 
 type serverInfoResponse struct {
-	ServerID                  string `json:"serverId"`
-	Name                      string `json:"name"`
-	PublicKeyFingerprintEmoji string `json:"publicKeyFingerprintEmoji"`
-	ServerFingerprint         string `json:"serverFingerprint"`
-	ServerPublicKey           string `json:"serverPublicKey"`
-	LiveKitURL                string `json:"livekitUrl"`
+	ServerID                  string   `json:"serverId"`
+	Name                      string   `json:"name"`
+	PublicKeyFingerprintEmoji string   `json:"publicKeyFingerprintEmoji"`
+	ServerFingerprint         string   `json:"serverFingerprint"`
+	ServerPublicKey           string   `json:"serverPublicKey"`
+	LiveKitURL                string   `json:"livekitUrl"`
+	AdminPublicKeys           []string `json:"adminPublicKeys"`
 }
 
 type createInviteRequest struct {
@@ -125,6 +126,9 @@ func TestServerInfo(t *testing.T) {
 	}
 	if strings.TrimSpace(parsed.LiveKitURL) == "" {
 		t.Fatal("expected non-empty 'livekitUrl'")
+	}
+	if parsed.AdminPublicKeys == nil {
+		t.Fatal("expected 'adminPublicKeys' to be present (possibly empty array)")
 	}
 }
 

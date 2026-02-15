@@ -28,7 +28,11 @@
 <h1>Servers</h1>
 
 {#if identity}
-	<IdentityCard title="Your Identity" fingerprint={identity.fingerprint} publicKey={identity.publicKey} />
+	<IdentityCard
+		title="Your Identity"
+		fingerprint={identity.fingerprint}
+		publicKey={identity.publicKey}
+	/>
 
 	<div class="header-row">
 		<h2>Known servers</h2>

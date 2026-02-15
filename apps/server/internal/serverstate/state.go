@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +22,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const challengeTTL = 2 * time.Minute
+const (
+	challengeTTL        = 2 * time.Minute
+	adminRequestMaxSkew = 2 * time.Minute
+)
 
 type APIError struct {
 	Status  int
@@ -44,11 +48,12 @@ type Channel struct {
 }
 
 type ServerInfo struct {
-	ServerID          string `json:"serverId"`
-	Name              string `json:"name"`
-	ServerFingerprint string `json:"serverFingerprint"`
-	ServerPublicKey   string `json:"serverPublicKey"`
-	LiveKitURL        string `json:"livekitUrl"`
+	ServerID          string   `json:"serverId"`
+	Name              string   `json:"name"`
+	ServerFingerprint string   `json:"serverFingerprint"`
+	ServerPublicKey   string   `json:"serverPublicKey"`
+	LiveKitURL        string   `json:"livekitUrl"`
+	AdminPublicKeys   []string `json:"adminPublicKeys"`
 }
 
 type CreateInviteResult struct {
@@ -56,6 +61,14 @@ type CreateInviteResult struct {
 	ServerBaseURL     string `json:"serverBaseUrl"`
 	ServerFingerprint string `json:"serverFingerprint"`
 	InviteLink        string `json:"inviteLink"`
+}
+
+type CreateInviteByAdminClientRequest struct {
+	AdminPublicKey  string
+	ClientPublicKey string
+	Label           string
+	IssuedAt        string
+	Signature       string
 }
 
 type BeginResult struct {
@@ -105,8 +118,9 @@ type identityRecord struct {
 }
 
 type serverConfigFile struct {
-	ServerName string    `json:"serverName"`
-	Channels   []Channel `json:"channels"`
+	ServerName      string    `json:"serverName"`
+	Channels        []Channel `json:"channels"`
+	AdminPublicKeys []string  `json:"adminPublicKeys"`
 }
 
 type inviteRecord struct {
@@ -181,12 +195,16 @@ func (s *State) ServerInfo() ServerInfo {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	admins := make([]string, len(s.serverCfg.AdminPublicKeys))
+	copy(admins, s.serverCfg.AdminPublicKeys)
+
 	return ServerInfo{
 		ServerID:          s.serverID,
 		Name:              s.serverCfg.ServerName,
 		ServerFingerprint: s.serverFingerprint,
 		ServerPublicKey:   s.serverPublicKey,
 		LiveKitURL:        s.cfg.LiveKitURL,
+		AdminPublicKeys:   admins,
 	}
 }
 
@@ -207,6 +225,56 @@ func (s *State) CreateInvite(clientPublicKeyB64, label string) (CreateInviteResu
 		return CreateInviteResult{}, newAPIError(400, "invalid_client_public_key", "clientPublicKey must be base64(ed25519 public key)")
 	}
 
+	return s.createInviteLocked(clientPublicKeyB64, label)
+}
+
+func (s *State) CreateInviteByAdminClient(req CreateInviteByAdminClientRequest) (CreateInviteResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	req.AdminPublicKey = strings.TrimSpace(req.AdminPublicKey)
+	req.ClientPublicKey = strings.TrimSpace(req.ClientPublicKey)
+	req.IssuedAt = strings.TrimSpace(req.IssuedAt)
+	req.Signature = strings.TrimSpace(req.Signature)
+
+	if req.AdminPublicKey == "" || req.ClientPublicKey == "" || req.IssuedAt == "" || req.Signature == "" {
+		return CreateInviteResult{}, newAPIError(400, "invalid_request", "adminPublicKey, clientPublicKey, issuedAt and signature are required")
+	}
+
+	adminKey, err := decodePublicKey(req.AdminPublicKey)
+	if err != nil {
+		return CreateInviteResult{}, newAPIError(400, "invalid_admin_public_key", "adminPublicKey must be base64(ed25519 public key)")
+	}
+	if _, err := decodePublicKey(req.ClientPublicKey); err != nil {
+		return CreateInviteResult{}, newAPIError(400, "invalid_client_public_key", "clientPublicKey must be base64(ed25519 public key)")
+	}
+
+	if !s.isAdminPublicKeyLocked(req.AdminPublicKey) {
+		return CreateInviteResult{}, newAPIError(403, "admin_forbidden", "client is not an administrator")
+	}
+
+	issuedAt, err := time.Parse(time.RFC3339, req.IssuedAt)
+	if err != nil {
+		return CreateInviteResult{}, newAPIError(400, "invalid_issued_at", "issuedAt must be RFC3339")
+	}
+	if time.Since(issuedAt.UTC()) > adminRequestMaxSkew || time.Until(issuedAt.UTC()) > adminRequestMaxSkew {
+		return CreateInviteResult{}, newAPIError(401, "stale_request", "issuedAt is outside allowed skew")
+	}
+
+	signature, err := decodeSignature(req.Signature)
+	if err != nil {
+		return CreateInviteResult{}, newAPIError(400, "invalid_signature", "signature must be base64(ed25519 signature)")
+	}
+
+	hash := AdminInvitePayloadHash(req.AdminPublicKey, req.ClientPublicKey, req.IssuedAt)
+	if !ed25519.Verify(adminKey, hash[:], signature) {
+		return CreateInviteResult{}, newAPIError(401, "invalid_signature", "signature verification failed")
+	}
+
+	return s.createInviteLocked(req.ClientPublicKey, req.Label)
+}
+
+func (s *State) createInviteLocked(clientPublicKeyB64, label string) (CreateInviteResult, error) {
 	inviteID, err := randomHex(16)
 	if err != nil {
 		return CreateInviteResult{}, fmt.Errorf("generate invite id: %w", err)
@@ -383,11 +451,28 @@ func (s *State) lookupInvite(inviteID string) (inviteRecord, error) {
 	return invite, nil
 }
 
+func (s *State) isAdminPublicKeyLocked(publicKey string) bool {
+	for _, admin := range s.serverCfg.AdminPublicKeys {
+		if admin == publicKey {
+			return true
+		}
+	}
+	return false
+}
+
 func SignaturePayloadHash(challenge []byte, inviteID, serverFingerprint string) [32]byte {
 	payload := make([]byte, 0, len(challenge)+len(inviteID)+len(serverFingerprint))
 	payload = append(payload, challenge...)
 	payload = append(payload, []byte(inviteID)...)
 	payload = append(payload, []byte(serverFingerprint)...)
+	return sha256.Sum256(payload)
+}
+
+func AdminInvitePayloadHash(adminPublicKey, clientPublicKey, issuedAt string) [32]byte {
+	payload := make([]byte, 0, len(adminPublicKey)+len(clientPublicKey)+len(issuedAt))
+	payload = append(payload, []byte(adminPublicKey)...)
+	payload = append(payload, []byte(clientPublicKey)...)
+	payload = append(payload, []byte(issuedAt)...)
 	return sha256.Sum256(payload)
 }
 
@@ -472,6 +557,11 @@ func loadOrCreateServerConfig(path, defaultServerName string) (serverConfigFile,
 		if len(cfg.Channels) == 0 {
 			return serverConfigFile{}, errors.New("server config has no channels")
 		}
+		admins, err := normalizePublicKeys(cfg.AdminPublicKeys)
+		if err != nil {
+			return serverConfigFile{}, fmt.Errorf("invalid adminPublicKeys in server config: %w", err)
+		}
+		cfg.AdminPublicKeys = admins
 		return cfg, nil
 	}
 
@@ -482,6 +572,7 @@ func loadOrCreateServerConfig(path, defaultServerName string) (serverConfigFile,
 			{ID: "voice-main", Type: "voice", Name: "Voice"},
 			{ID: "voice-afk", Type: "voice", Name: "AFK"},
 		},
+		AdminPublicKeys: []string{},
 	}
 
 	if cfg.ServerName == "" {
@@ -493,6 +584,27 @@ func loadOrCreateServerConfig(path, defaultServerName string) (serverConfigFile,
 	}
 
 	return cfg, nil
+}
+
+func normalizePublicKeys(values []string) ([]string, error) {
+	unique := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, err := decodePublicKey(value); err != nil {
+			return nil, err
+		}
+		if _, exists := unique[value]; exists {
+			continue
+		}
+		unique[value] = struct{}{}
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
 }
 
 func readJSON(path string, out any) error {

@@ -30,10 +30,10 @@ test:
 	cd apps/server && go test ./...
 
 docker-up:
-	docker compose -f deploy/docker-compose.yml up -d
+	docker compose up -d --build
 
 docker-down:
-	docker compose -f deploy/docker-compose.yml down
+	docker compose down
 
 ensure-test-env:
 	@if [ ! -f "$(TEST_ENV_FILE)" ]; then \

@@ -7,6 +7,7 @@
 
 	export let open = false;
 	export let identity: IdentityRecord;
+	export let allowedBaseURL: string | null = null;
 
 	const dispatch = createEventDispatcher<{
 		close: void;
@@ -23,7 +24,16 @@
 
 		try {
 			const parsedInvite = parseInviteLink(inviteLink);
-			const begin = await connectBegin(parsedInvite.inviteID, parsedInvite.baseUrl);
+			const targetBaseURL = parsedInvite.baseUrl.replace(/\/$/, '');
+			const normalizedAllowedBaseURL = allowedBaseURL?.replace(/\/$/, '') ?? null;
+			if (normalizedAllowedBaseURL && targetBaseURL !== normalizedAllowedBaseURL) {
+				throw new Error(
+					`invite base URL mismatch: expected ${normalizedAllowedBaseURL}, got ${targetBaseURL}`
+				);
+			}
+
+			const connectBaseURL = normalizedAllowedBaseURL ?? targetBaseURL;
+			const begin = await connectBegin(parsedInvite.inviteID, connectBaseURL);
 
 			if (begin.serverFingerprint !== parsedInvite.serverFingerprint) {
 				throw new Error(
@@ -48,13 +58,13 @@
 						displayName: 'Desktop Client'
 					}
 				},
-				parsedInvite.baseUrl
+				connectBaseURL
 			);
 
 			dispatch('connected', {
 				id: finish.serverId,
 				name: finish.serverName,
-				baseUrl: parsedInvite.baseUrl,
+				baseUrl: connectBaseURL,
 				serverFingerprint: finish.serverFingerprint,
 				livekitUrl: finish.livekitUrl,
 				channels: finish.channels,

@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 
 	"fosscord/apps/server/internal/config"
@@ -21,21 +24,26 @@ type healthResponse struct {
 }
 
 type serverInfoResponse struct {
-	ServerID                  string `json:"serverId"`
-	Name                      string `json:"name"`
-	PublicKeyFingerprintEmoji string `json:"publicKeyFingerprintEmoji"`
-	ServerFingerprint         string `json:"serverFingerprint"`
-	ServerPublicKey           string `json:"serverPublicKey"`
-	LiveKitURL                string `json:"livekitUrl"`
-}
-
-type livekitTokenResponse struct {
-	Token string `json:"token"`
+	ServerID                  string   `json:"serverId"`
+	Name                      string   `json:"name"`
+	PublicKeyFingerprintEmoji string   `json:"publicKeyFingerprintEmoji"`
+	ServerFingerprint         string   `json:"serverFingerprint"`
+	ServerPublicKey           string   `json:"serverPublicKey"`
+	LiveKitURL                string   `json:"livekitUrl"`
+	AdminPublicKeys           []string `json:"adminPublicKeys"`
 }
 
 type createInviteRequest struct {
 	ClientPublicKey string `json:"clientPublicKey"`
 	Label           string `json:"label"`
+}
+
+type createInviteByClientRequest struct {
+	AdminPublicKey  string `json:"adminPublicKey"`
+	ClientPublicKey string `json:"clientPublicKey"`
+	Label           string `json:"label"`
+	IssuedAt        string `json:"issuedAt"`
+	Signature       string `json:"signature"`
 }
 
 type connectBeginRequest struct {
@@ -60,6 +68,7 @@ func (h handlers) getServerInfo(w http.ResponseWriter, _ *http.Request) {
 		ServerFingerprint:         info.ServerFingerprint,
 		ServerPublicKey:           info.ServerPublicKey,
 		LiveKitURL:                info.LiveKitURL,
+		AdminPublicKeys:           info.AdminPublicKeys,
 	})
 }
 
@@ -82,6 +91,28 @@ func (h handlers) postAdminInvites(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.state.CreateInvite(strings.TrimSpace(req.ClientPublicKey), req.Label)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h handlers) postAdminInvitesClientSigned(w http.ResponseWriter, r *http.Request) {
+	var req createInviteByClientRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAPIError(w, &serverstate.APIError{Status: http.StatusBadRequest, Code: "invalid_json", Message: err.Error()})
+		return
+	}
+
+	result, err := h.state.CreateInviteByAdminClient(serverstate.CreateInviteByAdminClientRequest{
+		AdminPublicKey:  req.AdminPublicKey,
+		ClientPublicKey: req.ClientPublicKey,
+		Label:           req.Label,
+		IssuedAt:        req.IssuedAt,
+		Signature:       req.Signature,
+	})
 	if err != nil {
 		writeAPIError(w, err)
 		return
@@ -127,6 +158,38 @@ func (h handlers) postLiveKitToken(w http.ResponseWriter, _ *http.Request) {
 		Error:   "not_implemented",
 		Message: "livekit token generation stub: implement with server-sdk-go in next step",
 	})
+}
+
+func (h handlers) serveWebApp(w http.ResponseWriter, r *http.Request) {
+	webDist := strings.TrimSpace(h.cfg.WebDistDir)
+	if webDist == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	cleaned := path.Clean("/" + r.URL.Path)
+	if cleaned == "/api" || strings.HasPrefix(cleaned, "/api/") {
+		http.NotFound(w, r)
+		return
+	}
+	relPath := strings.TrimPrefix(cleaned, "/")
+	if relPath == "" || relPath == "." {
+		relPath = "index.html"
+	}
+
+	assetPath := filepath.Join(webDist, filepath.FromSlash(relPath))
+	if info, err := os.Stat(assetPath); err == nil && !info.IsDir() {
+		http.ServeFile(w, r, assetPath)
+		return
+	}
+
+	indexPath := filepath.Join(webDist, "index.html")
+	if _, err := os.Stat(indexPath); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	http.ServeFile(w, r, indexPath)
 }
 
 func (h handlers) authorizeAdmin(r *http.Request) error {

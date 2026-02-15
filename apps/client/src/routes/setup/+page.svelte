@@ -42,7 +42,11 @@
 <h1>Identity Setup</h1>
 
 {#if identity}
-	<IdentityCard title="Local Identity" fingerprint={identity.fingerprint} publicKey={identity.publicKey} />
+	<IdentityCard
+		title="Local Identity"
+		fingerprint={identity.fingerprint}
+		publicKey={identity.publicKey}
+	/>
 	<p>Identity is ready. You can now connect to servers.</p>
 	<button on:click={() => goto('/servers')}>Go to Servers</button>
 {:else}

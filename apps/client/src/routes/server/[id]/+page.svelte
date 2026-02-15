@@ -72,7 +72,8 @@
 			<ul>
 				{#each channels as channel}
 					<li>
-						<strong>[{channel.type}]</strong> {channel.name}
+						<strong>[{channel.type}]</strong>
+						{channel.name}
 					</li>
 				{/each}
 			</ul>

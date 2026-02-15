@@ -8,6 +8,7 @@ type Config struct {
 	PublicKeyFingerprintEmoji string
 	DataDir                   string
 	DatabasePath              string
+	WebDistDir                string
 	ServerPublicBaseURL       string
 	AdminToken                string
 	LiveKitURL                string
@@ -22,6 +23,7 @@ func Load() Config {
 		PublicKeyFingerprintEmoji: getEnv("SERVER_PUBLIC_KEY_FINGERPRINT_EMOJI", ":lock::satellite:"),
 		DataDir:                   getEnv("DATA_DIR", "data"),
 		DatabasePath:              os.Getenv("DB_PATH"),
+		WebDistDir:                os.Getenv("WEB_DIST_DIR"),
 		ServerPublicBaseURL:       getEnv("SERVER_PUBLIC_BASE_URL", "http://localhost:8080"),
 		AdminToken:                os.Getenv("ADMIN_TOKEN"),
 		LiveKitURL:                getEnv("LIVEKIT_URL", "http://localhost:7880"),

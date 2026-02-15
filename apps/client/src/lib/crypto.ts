@@ -60,6 +60,17 @@ async function sha256Bytes(data: Uint8Array): Promise<Uint8Array> {
 	return new Uint8Array(hashBuffer);
 }
 
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+	const total = parts.reduce((acc, part) => acc + part.length, 0);
+	const output = new Uint8Array(total);
+	let offset = 0;
+	for (const part of parts) {
+		output.set(part, offset);
+		offset += part.length;
+	}
+	return output;
+}
+
 export async function fingerprintFromPublicKey(publicKeyBase64: string): Promise<string> {
 	const publicKey = fromBase64(publicKeyBase64);
 	if (publicKey.length !== 32) {
@@ -67,7 +78,9 @@ export async function fingerprintFromPublicKey(publicKeyBase64: string): Promise
 	}
 
 	const hash = await sha256Bytes(publicKey);
-	const parts = Array.from(hash.slice(0, 4)).map((value) => fingerprintEmojis[value % fingerprintEmojis.length]);
+	const parts = Array.from(hash.slice(0, 4)).map(
+		(value) => fingerprintEmojis[value % fingerprintEmojis.length]
+	);
 	return parts.join('');
 }
 
@@ -133,15 +146,30 @@ export async function createHandshakeSignature(input: {
 		throw new Error('client private key must be 64 bytes base64 (Ed25519 secretKey)');
 	}
 
-	const payload = new Uint8Array(
-		challenge.length + input.inviteID.length + input.serverFingerprint.length
-	);
-	payload.set(challenge, 0);
-	payload.set(textEncoder.encode(input.inviteID), challenge.length);
-	payload.set(
-		textEncoder.encode(input.serverFingerprint),
-		challenge.length + input.inviteID.length
-	);
+	const inviteIDBytes = textEncoder.encode(input.inviteID);
+	const serverFingerprintBytes = textEncoder.encode(input.serverFingerprint);
+	const payload = concatBytes([challenge, inviteIDBytes, serverFingerprintBytes]);
+
+	const hash = await sha256Bytes(payload);
+	const signature = nacl.sign.detached(hash, secretKey);
+	return toBase64(signature);
+}
+
+export async function createAdminInviteSignature(input: {
+	adminPublicKey: string;
+	clientPublicKey: string;
+	issuedAt: string;
+	adminPrivateKeyBase64: string;
+}): Promise<string> {
+	const secretKey = fromBase64(input.adminPrivateKeyBase64);
+	if (secretKey.length !== 64) {
+		throw new Error('admin private key must be 64 bytes base64 (Ed25519 secretKey)');
+	}
+
+	const adminPublicKeyBytes = textEncoder.encode(input.adminPublicKey);
+	const clientPublicKeyBytes = textEncoder.encode(input.clientPublicKey);
+	const issuedAtBytes = textEncoder.encode(input.issuedAt);
+	const payload = concatBytes([adminPublicKeyBytes, clientPublicKeyBytes, issuedAtBytes]);
 
 	const hash = await sha256Bytes(payload);
 	const signature = nacl.sign.detached(hash, secretKey);

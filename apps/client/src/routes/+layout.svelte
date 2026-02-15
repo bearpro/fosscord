@@ -1,14 +1,20 @@
+<script lang="ts">
+	import { IS_SINGLE_SERVER_WEB_MODE } from '$lib/runtime';
+</script>
+
 <svelte:head>
-	<title>Fosscord Desktop</title>
+	<title>{IS_SINGLE_SERVER_WEB_MODE ? 'Fosscord Web' : 'Fosscord Desktop'}</title>
 </svelte:head>
 
 <div class="app-shell">
-	<header>
-		<nav>
-			<a href="/servers">Servers</a>
-			<a href="/setup">Identity</a>
-		</nav>
-	</header>
+	{#if !IS_SINGLE_SERVER_WEB_MODE}
+		<header>
+			<nav>
+				<a href="/servers">Servers</a>
+				<a href="/setup">Identity</a>
+			</nav>
+		</header>
+	{/if}
 
 	<main>
 		<slot />
@@ -18,11 +24,7 @@
 <style>
 	:global(body) {
 		margin: 0;
-		font-family:
-			'Iosevka',
-			'JetBrains Mono',
-			'Fira Code',
-			monospace;
+		font-family: 'Iosevka', 'JetBrains Mono', 'Fira Code', monospace;
 		background: linear-gradient(180deg, #f7f9fc 0%, #edf3fb 100%);
 		color: #1f2937;
 	}

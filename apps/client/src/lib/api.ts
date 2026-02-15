@@ -11,6 +11,7 @@ export type ServerInfo = {
 	serverFingerprint: string;
 	serverPublicKey: string;
 	livekitUrl: string;
+	adminPublicKeys: string[];
 };
 
 export type ConnectBeginResponse = {
@@ -43,6 +44,21 @@ export type ConnectFinishRequest = {
 	};
 };
 
+export type CreateInviteByClientRequest = {
+	adminPublicKey: string;
+	clientPublicKey: string;
+	label?: string;
+	issuedAt: string;
+	signature: string;
+};
+
+export type CreateInviteResponse = {
+	inviteId: string;
+	serverBaseUrl: string;
+	serverFingerprint: string;
+	inviteLink: string;
+};
+
 export type APIError = {
 	error: string;
 	message: string;
@@ -61,8 +77,8 @@ async function requestJSON<T>(input: {
 		method: input.method ?? 'GET',
 		headers: input.body
 			? {
-				'content-type': 'application/json'
-			}
+					'content-type': 'application/json'
+				}
 			: undefined,
 		body: input.body ? JSON.stringify(input.body) : undefined
 	});
@@ -103,10 +119,25 @@ export function connectBegin(inviteId: string, baseUrl?: string): Promise<Connec
 	});
 }
 
-export function connectFinish(request: ConnectFinishRequest, baseUrl?: string): Promise<ConnectFinishResponse> {
+export function connectFinish(
+	request: ConnectFinishRequest,
+	baseUrl?: string
+): Promise<ConnectFinishResponse> {
 	return requestJSON<ConnectFinishResponse>({
 		baseUrl,
 		path: '/api/connect/finish',
+		method: 'POST',
+		body: request
+	});
+}
+
+export function createInviteByClient(
+	request: CreateInviteByClientRequest,
+	baseUrl?: string
+): Promise<CreateInviteResponse> {
+	return requestJSON<CreateInviteResponse>({
+		baseUrl,
+		path: '/api/admin/invites/client-signed',
 		method: 'POST',
 		body: request
 	});

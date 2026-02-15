@@ -24,6 +24,7 @@ func main() {
 		"addr", cfg.Addr,
 		"data_dir", cfg.DataDir,
 		"db_path_set", cfg.DatabasePath != "",
+		"web_dist_dir_set", cfg.WebDistDir != "",
 		"admin_token_set", cfg.AdminToken != "",
 		"livekit_url_set", cfg.LiveKitURL != "",
 		"livekit_api_key_set", cfg.LiveKitAPIKey != "",
