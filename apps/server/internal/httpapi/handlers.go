@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"fosscord/apps/server/internal/config"
+	livekittoken "fosscord/apps/server/internal/livekit"
 	"fosscord/apps/server/internal/serverstate"
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
@@ -65,6 +66,26 @@ type createMessageRequest struct {
 
 type editMessageRequest struct {
 	ContentMarkdown string `json:"contentMarkdown"`
+}
+
+type liveKitTokenRequest struct {
+	ChannelID string `json:"channelId"`
+}
+
+type liveKitTokenResponse struct {
+	Token         string `json:"token"`
+	RoomName      string `json:"roomName"`
+	ChannelID     string `json:"channelId"`
+	ParticipantID string `json:"participantId"`
+}
+
+type voiceTouchRequest struct {
+	ChannelID          string `json:"channelId"`
+	AudioStreams       int    `json:"audioStreams"`
+	VideoStreams       int    `json:"videoStreams"`
+	CameraEnabled      bool   `json:"cameraEnabled"`
+	ScreenEnabled      bool   `json:"screenEnabled"`
+	ScreenAudioEnabled bool   `json:"screenAudioEnabled"`
 }
 
 type errorResponse struct {
@@ -323,11 +344,120 @@ func (h handlers) getChannelStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h handlers) postLiveKitToken(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusNotImplemented, errorResponse{
-		Error:   "not_implemented",
-		Message: "livekit token generation stub: implement with server-sdk-go in next step",
+func (h handlers) postLiveKitToken(w http.ResponseWriter, r *http.Request) {
+	sessionToken, err := bearerTokenFromHeader(r)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	var req liveKitTokenRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAPIError(w, &serverstate.APIError{Status: http.StatusBadRequest, Code: "invalid_json", Message: err.Error()})
+		return
+	}
+
+	joinCtx, err := h.state.BeginVoiceJoin(sessionToken, req.ChannelID)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	issuer := livekittoken.NewTokenIssuer(h.cfg.LiveKitAPIKey, h.cfg.LiveKitAPISecret)
+	if !issuer.Enabled() {
+		writeAPIError(w, &serverstate.APIError{
+			Status:  http.StatusServiceUnavailable,
+			Code:    "livekit_unavailable",
+			Message: "livekit credentials are not configured on server",
+		})
+		return
+	}
+
+	metadataJSON, err := json.Marshal(map[string]string{
+		"publicKey": joinCtx.Identity.PublicKey,
+		"channelId": joinCtx.ChannelID,
 	})
+	if err != nil {
+		writeAPIError(w, fmt.Errorf("encode livekit metadata: %w", err))
+		return
+	}
+
+	token, err := issuer.IssueVoiceToken(livekittoken.VoiceTokenInput{
+		RoomName: joinCtx.RoomName,
+		Identity: joinCtx.Identity.PublicKey,
+		Name:     joinCtx.Identity.DisplayName,
+		Metadata: string(metadataJSON),
+	})
+	if err != nil {
+		writeAPIError(w, fmt.Errorf("issue livekit token: %w", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, liveKitTokenResponse{
+		Token:         token,
+		RoomName:      joinCtx.RoomName,
+		ChannelID:     joinCtx.ChannelID,
+		ParticipantID: joinCtx.Identity.PublicKey,
+	})
+}
+
+func (h handlers) postLiveKitVoiceTouch(w http.ResponseWriter, r *http.Request) {
+	sessionToken, err := bearerTokenFromHeader(r)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	var req voiceTouchRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAPIError(w, &serverstate.APIError{Status: http.StatusBadRequest, Code: "invalid_json", Message: err.Error()})
+		return
+	}
+
+	if err := h.state.TouchVoicePresence(sessionToken, req.ChannelID, serverstate.VoicePresenceUpdate{
+		AudioStreams:       req.AudioStreams,
+		VideoStreams:       req.VideoStreams,
+		CameraEnabled:      req.CameraEnabled,
+		ScreenEnabled:      req.ScreenEnabled,
+		ScreenAudioEnabled: req.ScreenAudioEnabled,
+	}); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h handlers) postLiveKitVoiceLeave(w http.ResponseWriter, r *http.Request) {
+	sessionToken, err := bearerTokenFromHeader(r)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	if err := h.state.LeaveVoiceChannel(sessionToken); err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (h handlers) getLiveKitVoiceChannelState(w http.ResponseWriter, r *http.Request) {
+	sessionToken, err := bearerTokenFromHeader(r)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	channelID := chi.URLParam(r, "channelID")
+	state, err := h.state.GetVoiceChannelState(sessionToken, channelID)
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (h handlers) serveWebApp(w http.ResponseWriter, r *http.Request) {

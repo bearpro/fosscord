@@ -5,21 +5,27 @@
 	import {
 		createChannelMessage,
 		createInviteByClient,
+		createLiveKitVoiceToken,
 		editChannelMessage,
 		getChannelMessages,
 		getChannels,
 		getHealth,
 		getServerInfo,
+		getVoiceChannelState,
+		leaveVoiceChannel,
 		listInvitesByClient,
 		openChannelStream,
+		touchVoicePresence,
 		type ChannelMessage,
 		type ChannelStreamEvent,
-		type InviteSummary
+		type InviteSummary,
+		type VoiceParticipant
 	} from '$lib/api';
 	import { createAdminInviteSignature, createAdminListInvitesSignature } from '$lib/crypto';
 	import { renderMarkdown } from '$lib/markdown';
 	import { getServerByID, loadIdentity, upsertServer } from '$lib/storage';
 	import type { Channel, IdentityRecord, SavedServer } from '$lib/types';
+	import { Room, RoomEvent, Track, type RemoteTrack, type RemoteTrackPublication } from 'livekit-client';
 
 	let identity: IdentityRecord | null = null;
 	let server: SavedServer | null = null;
@@ -51,6 +57,31 @@
 	let streamSocket: WebSocket | null = null;
 	let streamChannelID = '';
 
+	let voiceRoom: Room | null = null;
+	let activeVoiceChannelID = '';
+	let voiceParticipants: VoiceParticipant[] = [];
+	let voiceConnecting = false;
+	let voiceLoadingState = false;
+	let voiceError = '';
+	let localMicEnabled = false;
+	let localCameraEnabled = false;
+	let localScreenEnabled = false;
+	let localScreenAudioEnabled = false;
+	let screenShareWithAudio = false;
+	let remoteVideoSources: Array<{
+		trackSid: string;
+		ownerPublicKey: string;
+		ownerName: string;
+		source: 'camera' | 'screen';
+	}> = [];
+	let watchedVideoTrackSIDs: string[] = [];
+	let mediaSinkElement: HTMLDivElement | null = null;
+	let videoGridElement: HTMLDivElement | null = null;
+	let voiceStateTimer: ReturnType<typeof setInterval> | null = null;
+	let voicePresenceTimer: ReturnType<typeof setInterval> | null = null;
+	const attachedAudioElements = new Map<string, HTMLMediaElement>();
+	const attachedVideoElements = new Map<string, HTMLMediaElement>();
+
 	let initialized = false;
 	let activeServerID = '';
 
@@ -61,6 +92,8 @@
 	$: isAdmin = Boolean(identity && adminPublicKeys.includes(identity.publicKey));
 	$: selectedTextChannelID =
 		currentView !== 'admin' && selectedChannel?.type === 'text' ? selectedChannel.id : '';
+	$: selectedVoiceChannelID =
+		currentView !== 'admin' && selectedChannel?.type === 'voice' ? selectedChannel.id : '';
 
 	onMount(() => {
 		initialized = true;
@@ -68,6 +101,7 @@
 
 	onDestroy(() => {
 		closeStream();
+		void disconnectVoiceChannel();
 	});
 
 	function closeStream() {
@@ -137,6 +171,476 @@
 		streamSocket = socket;
 	}
 
+	function toLiveKitWebSocketURL(rawURL: string): string {
+		const value = rawURL.trim();
+		if (!value) {
+			return '';
+		}
+		if (value.startsWith('ws://') || value.startsWith('wss://')) {
+			return value;
+		}
+		if (value.startsWith('http://')) {
+			return `ws://${value.slice('http://'.length)}`;
+		}
+		if (value.startsWith('https://')) {
+			return `wss://${value.slice('https://'.length)}`;
+		}
+		return value;
+	}
+
+	function stopVoiceTimers() {
+		if (voiceStateTimer) {
+			clearInterval(voiceStateTimer);
+			voiceStateTimer = null;
+		}
+		if (voicePresenceTimer) {
+			clearInterval(voicePresenceTimer);
+			voicePresenceTimer = null;
+		}
+	}
+
+	function clearMediaElements() {
+		for (const element of attachedAudioElements.values()) {
+			element.remove();
+		}
+		attachedAudioElements.clear();
+
+		for (const element of attachedVideoElements.values()) {
+			element.remove();
+		}
+		attachedVideoElements.clear();
+	}
+
+	function collectLocalVoicePresence() {
+		let audioStreams = 0;
+		let videoStreams = 0;
+		let cameraEnabled = false;
+		let screenEnabled = false;
+		let screenAudioEnabled = false;
+
+		const room = voiceRoom;
+		if (room) {
+			for (const publication of room.localParticipant.trackPublications.values()) {
+				if (!publication.track) {
+					continue;
+				}
+				if (publication.kind === Track.Kind.Audio) {
+					audioStreams += 1;
+				}
+				if (publication.kind === Track.Kind.Video) {
+					videoStreams += 1;
+				}
+				if (publication.source === Track.Source.Camera) {
+					cameraEnabled = true;
+				}
+				if (publication.source === Track.Source.ScreenShare) {
+					screenEnabled = true;
+				}
+				if (publication.source === Track.Source.ScreenShareAudio) {
+					screenAudioEnabled = true;
+				}
+			}
+		}
+
+		return {
+			audioStreams,
+			videoStreams,
+			cameraEnabled,
+			screenEnabled,
+			screenAudioEnabled
+		};
+	}
+
+	function syncLocalTrackFlags() {
+		const summary = collectLocalVoicePresence();
+		localMicEnabled = summary.audioStreams > 0;
+		localCameraEnabled = summary.cameraEnabled;
+		localScreenEnabled = summary.screenEnabled;
+		localScreenAudioEnabled = summary.screenAudioEnabled;
+	}
+
+	async function refreshVoiceState(channelID: string) {
+		if (!server?.sessionToken) {
+			return;
+		}
+		if (activeVoiceChannelID !== channelID) {
+			return;
+		}
+
+		voiceLoadingState = true;
+		try {
+			const response = await getVoiceChannelState({
+				channelId: channelID,
+				sessionToken: server.sessionToken,
+				baseUrl: server.baseUrl
+			});
+			if (activeVoiceChannelID === channelID) {
+				voiceParticipants = response.participants;
+			}
+		} catch (e) {
+			voiceError = e instanceof Error ? e.message : 'Failed to load voice channel state';
+		} finally {
+			voiceLoadingState = false;
+		}
+	}
+
+	async function pushVoicePresence(channelID: string) {
+		if (!server?.sessionToken || !voiceRoom || activeVoiceChannelID !== channelID) {
+			return;
+		}
+		const summary = collectLocalVoicePresence();
+
+		try {
+			await touchVoicePresence({
+				channelId: channelID,
+				sessionToken: server.sessionToken,
+				baseUrl: server.baseUrl,
+				audioStreams: summary.audioStreams,
+				videoStreams: summary.videoStreams,
+				cameraEnabled: summary.cameraEnabled,
+				screenEnabled: summary.screenEnabled,
+				screenAudioEnabled: summary.screenAudioEnabled
+			});
+		} catch (e) {
+			voiceError = e instanceof Error ? e.message : 'Failed to update voice state';
+		}
+	}
+
+	function startVoiceTimers(channelID: string) {
+		stopVoiceTimers();
+		voiceStateTimer = setInterval(() => {
+			void refreshVoiceState(channelID);
+		}, 3000);
+		voicePresenceTimer = setInterval(() => {
+			void pushVoicePresence(channelID);
+		}, 5000);
+	}
+
+	function attachRemoteAudio(track: RemoteTrack, trackSid: string) {
+		if (!mediaSinkElement || track.kind !== Track.Kind.Audio) {
+			return;
+		}
+
+		let element = attachedAudioElements.get(trackSid);
+		if (!element) {
+			element = track.attach();
+			element.autoplay = true;
+			element.setAttribute('playsinline', 'true');
+			element.classList.add('hidden-media');
+			attachedAudioElements.set(trackSid, element);
+			mediaSinkElement.appendChild(element);
+			return;
+		}
+
+		track.attach(element);
+	}
+
+	function detachRemoteAudio(trackSid: string) {
+		const existing = attachedAudioElements.get(trackSid);
+		if (!existing) {
+			return;
+		}
+		existing.remove();
+		attachedAudioElements.delete(trackSid);
+	}
+
+	function findRemoteVideoTrack(trackSid: string): RemoteTrack | null {
+		if (!voiceRoom) {
+			return null;
+		}
+		for (const participant of voiceRoom.remoteParticipants.values()) {
+			for (const publication of participant.trackPublications.values()) {
+				if (publication.trackSid !== trackSid) {
+					continue;
+				}
+				if (!publication.track || publication.kind !== Track.Kind.Video) {
+					continue;
+				}
+				return publication.track;
+			}
+		}
+		return null;
+	}
+
+	function attachWatchedVideo(trackSid: string) {
+		if (!videoGridElement) {
+			return;
+		}
+		if (attachedVideoElements.has(trackSid)) {
+			return;
+		}
+
+		const track = findRemoteVideoTrack(trackSid);
+		if (!track || track.kind !== Track.Kind.Video) {
+			return;
+		}
+
+		const element = track.attach();
+		element.autoplay = true;
+		element.setAttribute('playsinline', 'true');
+		element.classList.add('remote-video');
+		attachedVideoElements.set(trackSid, element);
+		videoGridElement.appendChild(element);
+	}
+
+	function detachWatchedVideo(trackSid: string) {
+		const existing = attachedVideoElements.get(trackSid);
+		if (!existing) {
+			return;
+		}
+		existing.remove();
+		attachedVideoElements.delete(trackSid);
+	}
+
+	function isWatchingVideo(trackSid: string): boolean {
+		return watchedVideoTrackSIDs.includes(trackSid);
+	}
+
+	function watchVideoTrack(trackSid: string) {
+		if (!isWatchingVideo(trackSid)) {
+			watchedVideoTrackSIDs = [...watchedVideoTrackSIDs, trackSid];
+		}
+		attachWatchedVideo(trackSid);
+	}
+
+	function unwatchVideoTrack(trackSid: string) {
+		watchedVideoTrackSIDs = watchedVideoTrackSIDs.filter((item) => item !== trackSid);
+		detachWatchedVideo(trackSid);
+	}
+
+	function toggleWatchVideo(trackSid: string) {
+		if (isWatchingVideo(trackSid)) {
+			unwatchVideoTrack(trackSid);
+			return;
+		}
+		watchVideoTrack(trackSid);
+	}
+
+	function updateRemoteVideoSources() {
+		if (!voiceRoom) {
+			remoteVideoSources = [];
+			watchedVideoTrackSIDs = [];
+			clearMediaElements();
+			return;
+		}
+
+		const collected: Array<{
+			trackSid: string;
+			ownerPublicKey: string;
+			ownerName: string;
+			source: 'camera' | 'screen';
+		}> = [];
+
+		for (const participant of voiceRoom.remoteParticipants.values()) {
+			for (const publication of participant.trackPublications.values()) {
+				if (publication.kind !== Track.Kind.Video) {
+					continue;
+				}
+				if (
+					publication.source !== Track.Source.Camera &&
+					publication.source !== Track.Source.ScreenShare
+				) {
+					continue;
+				}
+				const trackSid = publication.trackSid;
+				if (!trackSid) {
+					continue;
+				}
+				collected.push({
+					trackSid,
+					ownerPublicKey: participant.identity,
+					ownerName: participant.name?.trim() || participant.identity,
+					source: publication.source === Track.Source.Camera ? 'camera' : 'screen'
+				});
+			}
+		}
+
+		remoteVideoSources = collected;
+		const available = new Set(collected.map((item) => item.trackSid));
+		for (const watched of [...watchedVideoTrackSIDs]) {
+			if (!available.has(watched)) {
+				unwatchVideoTrack(watched);
+			}
+		}
+	}
+
+	async function disconnectVoiceChannel() {
+		stopVoiceTimers();
+
+		const previousServer = server;
+		const previousChannel = activeVoiceChannelID;
+		const currentRoom = voiceRoom;
+		voiceRoom = null;
+		activeVoiceChannelID = '';
+
+		if (currentRoom) {
+			currentRoom.removeAllListeners();
+			await currentRoom.disconnect(true);
+		}
+
+		clearMediaElements();
+		remoteVideoSources = [];
+		watchedVideoTrackSIDs = [];
+		localMicEnabled = false;
+		localCameraEnabled = false;
+		localScreenEnabled = false;
+		localScreenAudioEnabled = false;
+		voiceParticipants = [];
+
+		if (previousServer?.sessionToken && previousChannel) {
+			try {
+				await leaveVoiceChannel({
+					sessionToken: previousServer.sessionToken,
+					baseUrl: previousServer.baseUrl
+				});
+			} catch {
+				// Best effort cleanup on server-side presence.
+			}
+		}
+	}
+
+	function registerRoomHandlers(room: Room, channelID: string) {
+		room.on(RoomEvent.TrackSubscribed, (track, publication) => {
+			if (track.kind === Track.Kind.Audio) {
+				attachRemoteAudio(track, publication.trackSid);
+			}
+			if (track.kind === Track.Kind.Video && isWatchingVideo(publication.trackSid)) {
+				attachWatchedVideo(publication.trackSid);
+			}
+			updateRemoteVideoSources();
+		});
+
+		room.on(RoomEvent.TrackUnsubscribed, (_track, publication) => {
+			detachRemoteAudio(publication.trackSid);
+			detachWatchedVideo(publication.trackSid);
+			updateRemoteVideoSources();
+		});
+
+		room.on(RoomEvent.TrackPublished, () => {
+			updateRemoteVideoSources();
+		});
+		room.on(RoomEvent.TrackUnpublished, (publication: RemoteTrackPublication) => {
+			detachRemoteAudio(publication.trackSid);
+			detachWatchedVideo(publication.trackSid);
+			updateRemoteVideoSources();
+		});
+		room.on(RoomEvent.ParticipantConnected, () => {
+			updateRemoteVideoSources();
+			void refreshVoiceState(channelID);
+		});
+		room.on(RoomEvent.ParticipantDisconnected, () => {
+			updateRemoteVideoSources();
+			void refreshVoiceState(channelID);
+		});
+		room.on(RoomEvent.LocalTrackPublished, () => {
+			syncLocalTrackFlags();
+			void pushVoicePresence(channelID);
+		});
+		room.on(RoomEvent.LocalTrackUnpublished, () => {
+			syncLocalTrackFlags();
+			void pushVoicePresence(channelID);
+		});
+	}
+
+	async function joinVoiceChannel(channelID: string) {
+		if (!server?.sessionToken) {
+			voiceError = 'Missing session token. Reconnect using an invite link.';
+			return;
+		}
+
+		voiceConnecting = true;
+		voiceError = '';
+		await disconnectVoiceChannel();
+
+		const activeServer = server;
+		if (!activeServer?.sessionToken) {
+			voiceConnecting = false;
+			voiceError = 'Missing session token. Reconnect using an invite link.';
+			return;
+		}
+
+		try {
+			const tokenResponse = await createLiveKitVoiceToken({
+				channelId: channelID,
+				sessionToken: activeServer.sessionToken,
+				baseUrl: activeServer.baseUrl
+			});
+
+			const liveKitURL = toLiveKitWebSocketURL(activeServer.livekitUrl);
+			if (!liveKitURL) {
+				throw new Error('LiveKit URL is not configured');
+			}
+
+			const room = new Room();
+			registerRoomHandlers(room, channelID);
+
+			await room.connect(liveKitURL, tokenResponse.token);
+			await room.localParticipant.setMicrophoneEnabled(true);
+
+			voiceRoom = room;
+			activeVoiceChannelID = channelID;
+			syncLocalTrackFlags();
+			updateRemoteVideoSources();
+			await pushVoicePresence(channelID);
+			await refreshVoiceState(channelID);
+			startVoiceTimers(channelID);
+		} catch (e) {
+			voiceError = e instanceof Error ? e.message : 'Failed to join voice channel';
+			try {
+				await leaveVoiceChannel({
+					sessionToken: activeServer.sessionToken,
+					baseUrl: activeServer.baseUrl
+				});
+			} catch {
+				// Ignore cleanup failure and continue local disconnect.
+			}
+			await disconnectVoiceChannel();
+		} finally {
+			voiceConnecting = false;
+		}
+	}
+
+	async function toggleMicrophone() {
+		if (!voiceRoom || !activeVoiceChannelID) {
+			return;
+		}
+		try {
+			await voiceRoom.localParticipant.setMicrophoneEnabled(!localMicEnabled);
+			syncLocalTrackFlags();
+			await pushVoicePresence(activeVoiceChannelID);
+		} catch (e) {
+			voiceError = e instanceof Error ? e.message : 'Failed to toggle microphone';
+		}
+	}
+
+	async function toggleCamera() {
+		if (!voiceRoom || !activeVoiceChannelID) {
+			return;
+		}
+		try {
+			await voiceRoom.localParticipant.setCameraEnabled(!localCameraEnabled);
+			syncLocalTrackFlags();
+			await pushVoicePresence(activeVoiceChannelID);
+		} catch (e) {
+			voiceError = e instanceof Error ? e.message : 'Failed to toggle camera';
+		}
+	}
+
+	async function toggleScreenShare() {
+		if (!voiceRoom || !activeVoiceChannelID) {
+			return;
+		}
+		try {
+			await voiceRoom.localParticipant.setScreenShareEnabled(!localScreenEnabled, {
+				audio: screenShareWithAudio
+			});
+			syncLocalTrackFlags();
+			await pushVoicePresence(activeVoiceChannelID);
+		} catch (e) {
+			voiceError = e instanceof Error ? e.message : 'Failed to toggle screen sharing';
+		}
+	}
+
 	async function loadTextMessages(channelID: string) {
 		if (!server?.sessionToken || !server) {
 			textMessagesError = 'Missing session token. Reconnect using an invite link.';
@@ -169,6 +673,7 @@
 
 	async function initializeServer(serverID: string) {
 		activeServerID = serverID;
+		await disconnectVoiceChannel();
 		error = '';
 		loading = true;
 		invitesLoaded = false;
@@ -405,6 +910,14 @@
 		textMessagesError = '';
 		closeStream();
 	}
+
+	$: if (selectedVoiceChannelID && selectedVoiceChannelID !== activeVoiceChannelID && !loading) {
+		void joinVoiceChannel(selectedVoiceChannelID);
+	}
+
+	$: if (!selectedVoiceChannelID && activeVoiceChannelID && !loading) {
+		void disconnectVoiceChannel();
+	}
 </script>
 
 {#if server}
@@ -582,10 +1095,101 @@
 				{/if}
 			{:else}
 				<h2>{selectedChannel ? selectedChannel.name : 'Channel'}</h2>
-				<section class="card">
-					<p>Voice channel is not implemented in this step.</p>
-					<p>LiveKit URL: <code>{server.livekitUrl}</code></p>
-				</section>
+				<p class="muted">
+					Voice status:
+					<strong class={activeVoiceChannelID ? 'ok' : 'fail'}>
+						{activeVoiceChannelID ? 'connected' : 'disconnected'}
+					</strong>
+				</p>
+
+				{#if !server.sessionToken}
+					<p class="error">Missing session token. Reconnect using an invite link.</p>
+				{:else}
+					<section class="card">
+						<h3>Voice Controls</h3>
+						<div class="actions-row">
+							<button on:click={toggleMicrophone} disabled={voiceConnecting || !activeVoiceChannelID}>
+								{localMicEnabled ? 'Mute mic' : 'Unmute mic'}
+							</button>
+							<button on:click={toggleCamera} disabled={voiceConnecting || !activeVoiceChannelID}>
+								{localCameraEnabled ? 'Stop camera' : 'Start camera'}
+							</button>
+							<button on:click={toggleScreenShare} disabled={voiceConnecting || !activeVoiceChannelID}>
+								{localScreenEnabled ? 'Stop share' : 'Share screen'}
+							</button>
+						</div>
+						<label class="checkbox-row">
+							<input type="checkbox" bind:checked={screenShareWithAudio} />
+							<span>Include system audio when sharing screen</span>
+						</label>
+						<p class="muted">LiveKit URL: <code>{server.livekitUrl}</code></p>
+						{#if voiceConnecting}
+							<p>Connecting to voice channel...</p>
+						{/if}
+						{#if voiceError}
+							<p class="error">{voiceError}</p>
+						{/if}
+					</section>
+
+					<section class="card">
+						<h3>Users In Channel</h3>
+						{#if voiceLoadingState}
+							<p>Loading voice state...</p>
+						{:else if voiceParticipants.length === 0}
+							<p class="muted">No users in this voice channel yet.</p>
+						{:else}
+							<table>
+								<thead>
+									<tr>
+										<th>User</th>
+										<th>Public Key</th>
+										<th>Audio Streams</th>
+										<th>Video Streams</th>
+										<th>Camera</th>
+										<th>Screen</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each voiceParticipants as participant}
+										<tr>
+											<td>{participant.displayName}</td>
+											<td><code>{shortKey(participant.publicKey)}</code></td>
+											<td>{participant.audioStreams}</td>
+											<td>{participant.videoStreams}</td>
+											<td>{participant.cameraEnabled ? 'on' : 'off'}</td>
+											<td>{participant.screenEnabled ? 'on' : 'off'}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						{/if}
+					</section>
+
+					<section class="card">
+						<h3>Video Streams</h3>
+						{#if remoteVideoSources.length === 0}
+							<p class="muted">No remote camera/screen streams available.</p>
+						{:else}
+							<div class="video-source-list">
+								{#each remoteVideoSources as source}
+									<div class="video-source-item">
+										<div>
+											<strong>{source.source === 'camera' ? 'Camera' : 'Screen'}</strong>
+											<span>{source.ownerName}</span>
+											<code>{shortKey(source.ownerPublicKey)}</code>
+										</div>
+										<button on:click={() => toggleWatchVideo(source.trackSid)}>
+											{isWatchingVideo(source.trackSid) ? 'Stop watching' : 'Watch'}
+										</button>
+									</div>
+								{/each}
+							</div>
+						{/if}
+
+						<div class="video-grid" bind:this={videoGridElement}></div>
+						<div class="hidden-media-sink" bind:this={mediaSinkElement}></div>
+					</section>
+				{/if}
 			{/if}
 		</section>
 	</div>
@@ -729,6 +1333,20 @@
 		display: flex;
 		gap: 8px;
 		margin-top: 8px;
+		flex-wrap: wrap;
+	}
+
+	.checkbox-row {
+		margin-top: 8px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: #c8d6f0;
+	}
+
+	.checkbox-row input {
+		width: auto;
+		margin: 0;
 	}
 
 	button {
@@ -796,6 +1414,52 @@
 		border-radius: 8px;
 		background: #0e1420;
 		word-break: break-all;
+	}
+
+	.video-source-list {
+		display: grid;
+		gap: 8px;
+		margin-bottom: 12px;
+	}
+
+	.video-source-item {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 10px;
+		padding: 8px;
+		border-radius: 8px;
+		border: 1px solid #2f3c58;
+		background: #0f1521;
+	}
+
+	.video-source-item div {
+		display: grid;
+		gap: 2px;
+	}
+
+	.video-source-item span {
+		color: #9fb1cf;
+		font-size: 13px;
+	}
+
+	.video-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+		gap: 10px;
+	}
+
+	:global(.remote-video) {
+		width: 100%;
+		aspect-ratio: 16 / 9;
+		object-fit: cover;
+		border-radius: 10px;
+		border: 1px solid #2f3c58;
+		background: #05080f;
+	}
+
+	.hidden-media-sink {
+		display: none;
 	}
 
 	.markdown-body :global(p) {

@@ -73,7 +73,10 @@ Example `server_config.json` fragment:
 - `POST /api/connect/finish`
 - `POST /api/admin/invites` (Bearer `ADMIN_TOKEN`)
 - `POST /api/admin/invites/client-signed` (admin client signature)
-- `POST /api/livekit/token` (stub, 501)
+- `POST /api/livekit/token` (Bearer session token, voice channel token)
+- `POST /api/livekit/voice/touch` (heartbeat + stream counters)
+- `POST /api/livekit/voice/leave`
+- `GET /api/livekit/voice/channels/{channelID}/state`
 
 ## Web Single-Server Mode Behavior
 
@@ -89,6 +92,16 @@ In this mode the app:
 - shows message that user is not invited
 - fetches public admin list from `/api/server-info`
 - shows "Add user" action only when client public key is in `adminPublicKeys`
+- keeps "Connect via invite link" available
+
+## Voice Channels
+
+- One active voice channel per client identity at a time (server-enforced presence row).
+- Joining a voice channel auto-publishes microphone.
+- Clients auto-subscribe to all remote audio/video streams in that channel.
+- UI exposes toggles for mic, camera, and screen share (with optional system audio).
+- Voice presence/state is persisted via SQLite table `voice_presence` and returned by
+  `/api/livekit/voice/channels/{channelID}/state`.
 
 ## Integration Tests
 
@@ -108,4 +121,3 @@ KEEP=1 make test-integration
 
 - `DB_PATH` overrides SQLite file; relative paths are resolved under `DATA_DIR`.
 - `WEB_DIST_DIR` enables backend static file serving if set.
-- No real LiveKit token issuance yet (`/api/livekit/token` returns 501).

@@ -80,6 +80,11 @@ type connectFinishResponse struct {
 	SessionToken      string    `json:"sessionToken"`
 }
 
+type connectedSession struct {
+	Finish          connectFinishResponse
+	ClientPublicKey string
+}
+
 type messageAuthor struct {
 	DisplayName string `json:"displayName"`
 	PublicKey   string `json:"publicKey"`
@@ -109,6 +114,44 @@ type mutateMessageResponse struct {
 type apiErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
+}
+
+type liveKitTokenRequest struct {
+	ChannelID string `json:"channelId"`
+}
+
+type liveKitTokenResponse struct {
+	Token         string `json:"token"`
+	RoomName      string `json:"roomName"`
+	ChannelID     string `json:"channelId"`
+	ParticipantID string `json:"participantId"`
+}
+
+type voiceTouchRequest struct {
+	ChannelID          string `json:"channelId"`
+	AudioStreams       int    `json:"audioStreams"`
+	VideoStreams       int    `json:"videoStreams"`
+	CameraEnabled      bool   `json:"cameraEnabled"`
+	ScreenEnabled      bool   `json:"screenEnabled"`
+	ScreenAudioEnabled bool   `json:"screenAudioEnabled"`
+}
+
+type voiceParticipant struct {
+	PublicKey          string `json:"publicKey"`
+	DisplayName        string `json:"displayName"`
+	ChannelID          string `json:"channelId"`
+	JoinedAt           string `json:"joinedAt"`
+	LastSeenAt         string `json:"lastSeenAt"`
+	AudioStreams       int    `json:"audioStreams"`
+	VideoStreams       int    `json:"videoStreams"`
+	CameraEnabled      bool   `json:"cameraEnabled"`
+	ScreenEnabled      bool   `json:"screenEnabled"`
+	ScreenAudioEnabled bool   `json:"screenAudioEnabled"`
+}
+
+type voiceStateResponse struct {
+	ChannelID    string             `json:"channelId"`
+	Participants []voiceParticipant `json:"participants"`
 }
 
 func TestHealth(t *testing.T) {
@@ -291,7 +334,8 @@ func TestTextMessagesCreateListEdit(t *testing.T) {
 	t.Parallel()
 
 	baseURL := apiBaseURL()
-	finish := createConnectedClientSession(t, baseURL)
+	session := createConnectedClientSession(t, baseURL)
+	finish := session.Finish
 	if strings.TrimSpace(finish.SessionToken) == "" {
 		t.Fatal("expected sessionToken from connect/finish")
 	}
@@ -353,12 +397,94 @@ func TestTextMessagesCreateListEdit(t *testing.T) {
 	if edited.Message.ContentMarkdown != "Edited message" {
 		t.Fatalf("unexpected edited content: got=%q", edited.Message.ContentMarkdown)
 	}
-	if edited.Message.UpdatedAt == edited.Message.CreatedAt {
-		t.Fatal("expected updatedAt to change after edit")
+	if strings.TrimSpace(edited.Message.UpdatedAt) == "" {
+		t.Fatal("expected updatedAt to be set after edit")
+	}
+	if edited.Message.UpdatedAt < edited.Message.CreatedAt {
+		t.Fatalf("updatedAt must not be earlier than createdAt: createdAt=%q updatedAt=%q", edited.Message.CreatedAt, edited.Message.UpdatedAt)
 	}
 }
 
-func createConnectedClientSession(t *testing.T, baseURL string) connectFinishResponse {
+func TestVoiceTokenAndPresence(t *testing.T) {
+	t.Parallel()
+
+	baseURL := apiBaseURL()
+	session := createConnectedClientSession(t, baseURL)
+	finish := session.Finish
+
+	voiceChannelID := ""
+	for _, ch := range finish.Channels {
+		if ch.Type == "voice" {
+			voiceChannelID = ch.ID
+			break
+		}
+	}
+	if voiceChannelID == "" {
+		t.Fatal("expected at least one voice channel")
+	}
+
+	tokenBody := requestJSON(t, http.MethodPost, baseURL+"/api/livekit/token", map[string]string{
+		"Authorization": "Bearer " + finish.SessionToken,
+	}, liveKitTokenRequest{ChannelID: voiceChannelID}, http.StatusOK)
+
+	var tokenResp liveKitTokenResponse
+	mustParseJSON(t, tokenBody, &tokenResp)
+	if strings.TrimSpace(tokenResp.Token) == "" {
+		t.Fatal("expected non-empty livekit token")
+	}
+	if tokenResp.ChannelID != voiceChannelID {
+		t.Fatalf("unexpected channel id in token response: got=%q want=%q", tokenResp.ChannelID, voiceChannelID)
+	}
+	if tokenResp.ParticipantID != session.ClientPublicKey {
+		t.Fatalf("unexpected participant identity in token response: got=%q want=%q", tokenResp.ParticipantID, session.ClientPublicKey)
+	}
+
+	_ = requestJSON(t, http.MethodPost, baseURL+"/api/livekit/voice/touch", map[string]string{
+		"Authorization": "Bearer " + finish.SessionToken,
+	}, voiceTouchRequest{
+		ChannelID:          voiceChannelID,
+		AudioStreams:       2,
+		VideoStreams:       1,
+		CameraEnabled:      true,
+		ScreenEnabled:      false,
+		ScreenAudioEnabled: false,
+	}, http.StatusOK)
+
+	stateBody := requestJSON(t, http.MethodGet, baseURL+"/api/livekit/voice/channels/"+voiceChannelID+"/state", map[string]string{
+		"Authorization": "Bearer " + finish.SessionToken,
+	}, nil, http.StatusOK)
+
+	var state voiceStateResponse
+	mustParseJSON(t, stateBody, &state)
+	if state.ChannelID != voiceChannelID {
+		t.Fatalf("unexpected voice state channel id: got=%q want=%q", state.ChannelID, voiceChannelID)
+	}
+	if len(state.Participants) == 0 {
+		t.Fatal("expected at least one participant in voice state")
+	}
+
+	found := false
+	for _, participant := range state.Participants {
+		if participant.PublicKey != session.ClientPublicKey {
+			continue
+		}
+		found = true
+		if participant.AudioStreams != 2 {
+			t.Fatalf("unexpected audio streams: got=%d want=%d", participant.AudioStreams, 2)
+		}
+		if participant.VideoStreams != 1 {
+			t.Fatalf("unexpected video streams: got=%d want=%d", participant.VideoStreams, 1)
+		}
+		if !participant.CameraEnabled {
+			t.Fatal("expected cameraEnabled=true")
+		}
+	}
+	if !found {
+		t.Fatal("expected to find test participant in voice state")
+	}
+}
+
+func createConnectedClientSession(t *testing.T, baseURL string) connectedSession {
 	t.Helper()
 
 	adminToken := adminToken()
@@ -396,7 +522,10 @@ func createConnectedClientSession(t *testing.T, baseURL string) connectFinishRes
 
 	var finish connectFinishResponse
 	mustParseJSON(t, finishBody, &finish)
-	return finish
+	return connectedSession{
+		Finish:          finish,
+		ClientPublicKey: clientPublicB64,
+	}
 }
 
 func verifyExpectedFingerprint(expected, actual string) error {

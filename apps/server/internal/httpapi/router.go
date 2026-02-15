@@ -55,6 +55,9 @@ func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
 			admin.Post("/invites/list/client-signed", h.postAdminInvitesListClientSigned)
 		})
 		api.Post("/livekit/token", h.postLiveKitToken)
+		api.Post("/livekit/voice/touch", h.postLiveKitVoiceTouch)
+		api.Post("/livekit/voice/leave", h.postLiveKitVoiceLeave)
+		api.Get("/livekit/voice/channels/{channelID}/state", h.getLiveKitVoiceChannelState)
 	})
 
 	if strings.TrimSpace(cfg.WebDistDir) != "" {

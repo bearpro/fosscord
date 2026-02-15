@@ -105,6 +105,31 @@ export type ChannelStreamEvent = {
 	message?: ChannelMessage;
 };
 
+export type VoiceParticipant = {
+	publicKey: string;
+	displayName: string;
+	channelId: string;
+	joinedAt: string;
+	lastSeenAt: string;
+	audioStreams: number;
+	videoStreams: number;
+	cameraEnabled: boolean;
+	screenEnabled: boolean;
+	screenAudioEnabled: boolean;
+};
+
+export type VoiceChannelState = {
+	channelId: string;
+	participants: VoiceParticipant[];
+};
+
+export type LiveKitVoiceTokenResponse = {
+	token: string;
+	roomName: string;
+	channelId: string;
+	participantId: string;
+};
+
 export type APIError = {
 	error: string;
 	message: string;
@@ -257,6 +282,73 @@ export function editChannelMessage(input: {
 		body: {
 			contentMarkdown: input.contentMarkdown
 		}
+	});
+}
+
+export function createLiveKitVoiceToken(input: {
+	channelId: string;
+	sessionToken: string;
+	baseUrl?: string;
+}): Promise<LiveKitVoiceTokenResponse> {
+	return requestJSON<LiveKitVoiceTokenResponse>({
+		baseUrl: input.baseUrl,
+		path: '/api/livekit/token',
+		method: 'POST',
+		headers: authHeaders(input.sessionToken),
+		body: {
+			channelId: input.channelId
+		}
+	});
+}
+
+export function touchVoicePresence(input: {
+	channelId: string;
+	sessionToken: string;
+	audioStreams: number;
+	videoStreams: number;
+	cameraEnabled: boolean;
+	screenEnabled: boolean;
+	screenAudioEnabled: boolean;
+	baseUrl?: string;
+}): Promise<{ status: 'ok' }> {
+	return requestJSON<{ status: 'ok' }>({
+		baseUrl: input.baseUrl,
+		path: '/api/livekit/voice/touch',
+		method: 'POST',
+		headers: authHeaders(input.sessionToken),
+		body: {
+			channelId: input.channelId,
+			audioStreams: input.audioStreams,
+			videoStreams: input.videoStreams,
+			cameraEnabled: input.cameraEnabled,
+			screenEnabled: input.screenEnabled,
+			screenAudioEnabled: input.screenAudioEnabled
+		}
+	});
+}
+
+export function leaveVoiceChannel(input: {
+	sessionToken: string;
+	baseUrl?: string;
+}): Promise<{ status: 'ok' }> {
+	return requestJSON<{ status: 'ok' }>({
+		baseUrl: input.baseUrl,
+		path: '/api/livekit/voice/leave',
+		method: 'POST',
+		headers: authHeaders(input.sessionToken),
+		body: {}
+	});
+}
+
+export function getVoiceChannelState(input: {
+	channelId: string;
+	sessionToken: string;
+	baseUrl?: string;
+}): Promise<VoiceChannelState> {
+	return requestJSON<VoiceChannelState>({
+		baseUrl: input.baseUrl,
+		path: `/api/livekit/voice/channels/${encodeURIComponent(input.channelId)}/state`,
+		headers: authHeaders(input.sessionToken)
 	});
 }
 
