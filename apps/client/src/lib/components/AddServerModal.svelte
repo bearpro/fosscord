@@ -67,6 +67,7 @@
 				baseUrl: connectBaseURL,
 				serverFingerprint: finish.serverFingerprint,
 				livekitUrl: finish.livekitUrl,
+				sessionToken: finish.sessionToken,
 				channels: finish.channels,
 				lastConnectedAt: new Date().toISOString()
 			});

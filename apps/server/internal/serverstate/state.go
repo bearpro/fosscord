@@ -25,6 +25,7 @@ import (
 const (
 	challengeTTL        = 2 * time.Minute
 	adminRequestMaxSkew = 2 * time.Minute
+	sessionTTL          = 30 * 24 * time.Hour
 )
 
 type APIError struct {
@@ -125,6 +126,8 @@ type State struct {
 	db         *sql.DB
 	serverCfg  serverConfigFile
 	challenges map[string]pendingChallenge
+	streams    map[string]map[int]chan ChannelEvent
+	nextStream int
 
 	serverID          string
 	serverFingerprint string
@@ -204,6 +207,7 @@ func New(cfg config.Config) (*State, error) {
 		db:                db,
 		serverCfg:         serverCfg,
 		challenges:        make(map[string]pendingChallenge),
+		streams:           make(map[string]map[int]chan ChannelEvent),
 		serverID:          stableServerID(pub),
 		serverFingerprint: FingerprintFromPublicKey(pub),
 		serverPublicKey:   base64.StdEncoding.EncodeToString(pub),
@@ -520,12 +524,23 @@ func (s *State) FinishConnect(req FinishRequest) (FinishResult, error) {
 	channels := make([]Channel, len(s.serverCfg.Channels))
 	copy(channels, s.serverCfg.Channels)
 
+	displayName := normalizeDisplayName(req.ClientInfo.DisplayName, req.ClientPublicKey)
+	if err := s.upsertMemberLocked(req.ClientPublicKey, displayName); err != nil {
+		return FinishResult{}, err
+	}
+
+	sessionToken, err := s.issueSessionTokenLocked(req.ClientPublicKey)
+	if err != nil {
+		return FinishResult{}, err
+	}
+
 	return FinishResult{
 		ServerID:          s.serverID,
 		ServerName:        s.serverCfg.ServerName,
 		ServerFingerprint: s.serverFingerprint,
 		LiveKitURL:        s.cfg.LiveKitURL,
 		Channels:          channels,
+		SessionToken:      sessionToken,
 	}, nil
 }
 

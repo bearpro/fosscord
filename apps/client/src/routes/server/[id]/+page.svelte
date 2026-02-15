@@ -1,16 +1,23 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import {
+		createChannelMessage,
 		createInviteByClient,
+		editChannelMessage,
+		getChannelMessages,
 		getChannels,
 		getHealth,
 		getServerInfo,
 		listInvitesByClient,
+		openChannelStream,
+		type ChannelMessage,
+		type ChannelStreamEvent,
 		type InviteSummary
 	} from '$lib/api';
 	import { createAdminInviteSignature, createAdminListInvitesSignature } from '$lib/crypto';
+	import { renderMarkdown } from '$lib/markdown';
 	import { getServerByID, loadIdentity, upsertServer } from '$lib/storage';
 	import type { Channel, IdentityRecord, SavedServer } from '$lib/types';
 
@@ -32,6 +39,18 @@
 	let invitesError = '';
 	let invitesLoaded = false;
 	let invites: InviteSummary[] = [];
+
+	let textMessages: ChannelMessage[] = [];
+	let loadingTextMessages = false;
+	let textMessagesError = '';
+	let messageDraft = '';
+	let sendingMessage = false;
+	let editingMessageID = '';
+	let editingDraft = '';
+
+	let streamSocket: WebSocket | null = null;
+	let streamChannelID = '';
+
 	let initialized = false;
 	let activeServerID = '';
 
@@ -40,10 +59,113 @@
 	$: selectedChannel =
 		channels.find((channel) => channel.id === currentChannelID) ?? channels[0] ?? null;
 	$: isAdmin = Boolean(identity && adminPublicKeys.includes(identity.publicKey));
+	$: selectedTextChannelID =
+		currentView !== 'admin' && selectedChannel?.type === 'text' ? selectedChannel.id : '';
 
 	onMount(() => {
 		initialized = true;
 	});
+
+	onDestroy(() => {
+		closeStream();
+	});
+
+	function closeStream() {
+		if (streamSocket) {
+			streamSocket.close();
+			streamSocket = null;
+		}
+	}
+
+	function shortKey(value: string): string {
+		if (value.length <= 20) {
+			return value;
+		}
+		return `${value.slice(0, 10)}...${value.slice(-8)}`;
+	}
+
+	function formatTimestamp(value: string): string {
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) {
+			return value;
+		}
+		return date.toLocaleString();
+	}
+
+	function sortMessages(messages: ChannelMessage[]): ChannelMessage[] {
+		return [...messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+	}
+
+	function upsertMessage(message: ChannelMessage) {
+		const index = textMessages.findIndex((item) => item.id === message.id);
+		if (index >= 0) {
+			textMessages[index] = message;
+		} else {
+			textMessages = [...textMessages, message];
+		}
+		textMessages = sortMessages(textMessages);
+	}
+
+	function connectTextStream(channelID: string) {
+		if (!server?.sessionToken) {
+			return;
+		}
+
+		closeStream();
+
+		const socket = openChannelStream({
+			channelId: channelID,
+			sessionToken: server.sessionToken,
+			baseUrl: server.baseUrl
+		});
+
+		socket.onmessage = (event) => {
+			try {
+				const parsed = JSON.parse(event.data) as ChannelStreamEvent;
+				if ((parsed.type === 'message.created' || parsed.type === 'message.updated') && parsed.message) {
+					upsertMessage(parsed.message);
+				}
+			} catch {
+				// Ignore malformed websocket messages.
+			}
+		};
+
+		socket.onerror = () => {
+			textMessagesError = 'Live updates connection failed.';
+		};
+
+		streamSocket = socket;
+	}
+
+	async function loadTextMessages(channelID: string) {
+		if (!server?.sessionToken || !server) {
+			textMessagesError = 'Missing session token. Reconnect using an invite link.';
+			textMessages = [];
+			return;
+		}
+
+		loadingTextMessages = true;
+		textMessagesError = '';
+		editingMessageID = '';
+		editingDraft = '';
+
+		try {
+			const response = await getChannelMessages({
+				channelId: channelID,
+				sessionToken: server.sessionToken,
+				baseUrl: server.baseUrl,
+				limit: 100
+			});
+			textMessages = sortMessages(response.messages);
+			connectTextStream(channelID);
+		} catch (e) {
+			textMessagesError = e instanceof Error ? e.message : 'Failed to load messages';
+			textMessages = [];
+			closeStream();
+		} finally {
+			loadingTextMessages = false;
+		}
+	}
 
 	async function initializeServer(serverID: string) {
 		activeServerID = serverID;
@@ -53,6 +175,10 @@
 		invites = [];
 		invitesError = '';
 		adminPublicKeys = [];
+		textMessages = [];
+		textMessagesError = '';
+		streamChannelID = '';
+		closeStream();
 
 		if (!serverID) {
 			error = 'Missing server id';
@@ -97,6 +223,7 @@
 				name: serverInfo.name,
 				serverFingerprint: serverInfo.serverFingerprint,
 				livekitUrl: serverInfo.livekitUrl,
+				sessionToken: server.sessionToken,
 				channels,
 				lastConnectedAt: new Date().toISOString()
 			};
@@ -206,6 +333,56 @@
 		}
 	}
 
+	async function handleSendMessage() {
+		if (!server?.sessionToken || !selectedTextChannelID || !messageDraft.trim()) {
+			return;
+		}
+
+		sendingMessage = true;
+		textMessagesError = '';
+		try {
+			const response = await createChannelMessage({
+				channelId: selectedTextChannelID,
+				sessionToken: server.sessionToken,
+				contentMarkdown: messageDraft.trim(),
+				baseUrl: server.baseUrl
+			});
+			upsertMessage(response.message);
+			messageDraft = '';
+		} catch (e) {
+			textMessagesError = e instanceof Error ? e.message : 'Failed to send message';
+		} finally {
+			sendingMessage = false;
+		}
+	}
+
+	function startEditMessage(message: ChannelMessage) {
+		editingMessageID = message.id;
+		editingDraft = message.contentMarkdown;
+	}
+
+	async function saveEditMessage() {
+		if (!server?.sessionToken || !selectedTextChannelID || !editingMessageID || !editingDraft.trim()) {
+			return;
+		}
+
+		textMessagesError = '';
+		try {
+			const response = await editChannelMessage({
+				channelId: selectedTextChannelID,
+				messageId: editingMessageID,
+				sessionToken: server.sessionToken,
+				contentMarkdown: editingDraft.trim(),
+				baseUrl: server.baseUrl
+			});
+			upsertMessage(response.message);
+			editingMessageID = '';
+			editingDraft = '';
+		} catch (e) {
+			textMessagesError = e instanceof Error ? e.message : 'Failed to edit message';
+		}
+	}
+
 	$: if (currentView === 'admin' && isAdmin && !loading && !invitesLoaded && !loadingInvites) {
 		void refreshInvites();
 	}
@@ -215,6 +392,18 @@
 		if (serverID && serverID !== activeServerID) {
 			void initializeServer(serverID);
 		}
+	}
+
+	$: if (selectedTextChannelID && selectedTextChannelID !== streamChannelID && !loading) {
+		streamChannelID = selectedTextChannelID;
+		void loadTextMessages(selectedTextChannelID);
+	}
+
+	$: if (!selectedTextChannelID) {
+		streamChannelID = '';
+		textMessages = [];
+		textMessagesError = '';
+		closeStream();
 	}
 </script>
 
@@ -316,8 +505,8 @@
 											</td>
 											<td><code>{invite.inviteId}</code></td>
 											<td>{invite.label || '-'}</td>
-											<td><code>{invite.allowedClientPublicKey}</code></td>
-											<td>{invite.createdAt}</td>
+											<td><code>{shortKey(invite.allowedClientPublicKey)}</code></td>
+											<td>{formatTimestamp(invite.createdAt)}</td>
 										</tr>
 									{/each}
 								</tbody>
@@ -325,16 +514,77 @@
 						{/if}
 					</section>
 				{/if}
+			{:else if selectedChannel?.type === 'text'}
+				<h2>{selectedChannel.name}</h2>
+				<p class="muted">
+					Backend: <strong class={backendStatus === 'ok' ? 'ok' : 'fail'}>{backendStatus}</strong>
+				</p>
+				{#if !server.sessionToken}
+					<p class="error">Missing session token. Reconnect using an invite link.</p>
+				{:else}
+					<section class="chat-shell">
+						<div class="message-list">
+							{#if loadingTextMessages}
+								<p>Loading recent messages...</p>
+							{:else if textMessagesError}
+								<p class="error">{textMessagesError}</p>
+							{:else if textMessages.length === 0}
+								<p class="muted">No messages yet.</p>
+							{:else}
+								{#each textMessages as message}
+									<article class="message-item">
+										<header>
+											<strong>{message.author.displayName}</strong>
+											<code>{shortKey(message.author.publicKey)}</code>
+											<span>{formatTimestamp(message.createdAt)}</span>
+											{#if message.updatedAt !== message.createdAt}
+												<em>(edited)</em>
+											{/if}
+											<button class="link-btn" on:click={() => startEditMessage(message)}>Edit</button>
+										</header>
+										{#if editingMessageID === message.id}
+											<div class="edit-box">
+												<textarea bind:value={editingDraft} rows="3"></textarea>
+												<div class="actions-row">
+													<button on:click={saveEditMessage} disabled={!editingDraft.trim()}>Save</button>
+													<button
+														class="ghost"
+														on:click={() => {
+															editingMessageID = '';
+															editingDraft = '';
+														}}
+													>
+														Cancel
+													</button>
+												</div>
+											</div>
+										{:else}
+											<div class="markdown-body">{@html renderMarkdown(message.contentMarkdown)}</div>
+										{/if}
+									</article>
+								{/each}
+							{/if}
+						</div>
+
+						<div class="composer">
+							<textarea
+								bind:value={messageDraft}
+								rows="4"
+								placeholder="Write a message in Markdown..."
+							></textarea>
+							<div class="actions-row">
+								<button on:click={handleSendMessage} disabled={sendingMessage || !messageDraft.trim()}>
+									{sendingMessage ? 'Sending...' : 'Send'}
+								</button>
+							</div>
+						</div>
+					</section>
+				{/if}
 			{:else}
 				<h2>{selectedChannel ? selectedChannel.name : 'Channel'}</h2>
-				<p class="muted">
-					Type: <strong>{selectedChannel?.type ?? 'unknown'}</strong>
-				</p>
 				<section class="card">
-					<p>Backend status: <strong class={backendStatus === 'ok' ? 'ok' : 'fail'}>{backendStatus}</strong></p>
-					<p>Server fingerprint: <code>{server.serverFingerprint}</code></p>
+					<p>Voice channel is not implemented in this step.</p>
 					<p>LiveKit URL: <code>{server.livekitUrl}</code></p>
-					<p>Channel content is not implemented yet.</p>
 				</section>
 			{/if}
 		</section>
@@ -423,6 +673,58 @@
 		background: #151c2b;
 	}
 
+	.chat-shell {
+		margin-top: 12px;
+		display: grid;
+		grid-template-rows: minmax(0, 1fr) auto;
+		gap: 12px;
+		min-height: 560px;
+	}
+
+	.message-list {
+		border: 1px solid #2f3c58;
+		border-radius: 10px;
+		padding: 12px;
+		background: #151c2b;
+		overflow: auto;
+	}
+
+	.message-item {
+		border-bottom: 1px solid #2f3c58;
+		padding: 10px 0;
+	}
+
+	.message-item:last-child {
+		border-bottom: 0;
+	}
+
+	.message-item header {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		font-size: 13px;
+		color: #c8d6f0;
+		margin-bottom: 8px;
+	}
+
+	.message-item header span,
+	.message-item header em {
+		color: #96a9c9;
+		font-size: 12px;
+	}
+
+	.composer {
+		border: 1px solid #2f3c58;
+		border-radius: 10px;
+		padding: 10px;
+		background: #151c2b;
+	}
+
+	.edit-box {
+		display: grid;
+		gap: 8px;
+	}
+
 	.actions-row {
 		display: flex;
 		gap: 8px;
@@ -445,6 +747,12 @@
 	button:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
+	}
+
+	.link-btn {
+		background: transparent;
+		color: #9fc2ff;
+		padding: 0;
 	}
 
 	textarea,
@@ -488,6 +796,21 @@
 		border-radius: 8px;
 		background: #0e1420;
 		word-break: break-all;
+	}
+
+	.markdown-body :global(p) {
+		margin: 0 0 8px;
+	}
+
+	.markdown-body :global(p:last-child) {
+		margin-bottom: 0;
+	}
+
+	.markdown-body :global(pre) {
+		background: #0f1521;
+		padding: 8px;
+		border-radius: 8px;
+		overflow: auto;
 	}
 
 	.ok {

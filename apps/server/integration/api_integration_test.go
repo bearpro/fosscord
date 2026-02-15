@@ -80,6 +80,32 @@ type connectFinishResponse struct {
 	SessionToken      string    `json:"sessionToken"`
 }
 
+type messageAuthor struct {
+	DisplayName string `json:"displayName"`
+	PublicKey   string `json:"publicKey"`
+}
+
+type channelMessage struct {
+	ID              string        `json:"id"`
+	ChannelID       string        `json:"channelId"`
+	Author          messageAuthor `json:"author"`
+	ContentMarkdown string        `json:"contentMarkdown"`
+	CreatedAt       string        `json:"createdAt"`
+	UpdatedAt       string        `json:"updatedAt"`
+}
+
+type listMessagesResponse struct {
+	Messages []channelMessage `json:"messages"`
+}
+
+type mutateMessageRequest struct {
+	ContentMarkdown string `json:"contentMarkdown"`
+}
+
+type mutateMessageResponse struct {
+	Message channelMessage `json:"message"`
+}
+
 type apiErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
@@ -185,6 +211,9 @@ func TestConnectHandshakeSuccess(t *testing.T) {
 	if len(finish.Channels) == 0 {
 		t.Fatal("expected channels in handshake finish response")
 	}
+	if strings.TrimSpace(finish.SessionToken) == "" {
+		t.Fatal("expected non-empty sessionToken")
+	}
 }
 
 func TestConnectFingerprintMismatch(t *testing.T) {
@@ -256,6 +285,118 @@ func TestConnectInvalidSignature(t *testing.T) {
 	if apiErr.Error != "invalid_signature" {
 		t.Fatalf("unexpected error code: got=%q want=%q body=%s", apiErr.Error, "invalid_signature", string(body))
 	}
+}
+
+func TestTextMessagesCreateListEdit(t *testing.T) {
+	t.Parallel()
+
+	baseURL := apiBaseURL()
+	finish := createConnectedClientSession(t, baseURL)
+	if strings.TrimSpace(finish.SessionToken) == "" {
+		t.Fatal("expected sessionToken from connect/finish")
+	}
+
+	textChannelID := ""
+	for _, ch := range finish.Channels {
+		if ch.Type == "text" {
+			textChannelID = ch.ID
+			break
+		}
+	}
+	if textChannelID == "" {
+		t.Fatal("expected at least one text channel")
+	}
+
+	createBody := requestJSON(t, http.MethodPost, baseURL+"/api/channels/"+textChannelID+"/messages", map[string]string{
+		"Authorization": "Bearer " + finish.SessionToken,
+	}, mutateMessageRequest{ContentMarkdown: "Hello **integration** test"}, http.StatusOK)
+
+	var created mutateMessageResponse
+	mustParseJSON(t, createBody, &created)
+	if created.Message.ID == "" {
+		t.Fatal("expected message id")
+	}
+	if created.Message.ChannelID != textChannelID {
+		t.Fatalf("unexpected channel id: got=%q want=%q", created.Message.ChannelID, textChannelID)
+	}
+	if strings.TrimSpace(created.Message.Author.PublicKey) == "" || strings.TrimSpace(created.Message.Author.DisplayName) == "" {
+		t.Fatal("expected author info in created message")
+	}
+
+	listBody := requestJSON(t, http.MethodGet, baseURL+"/api/channels/"+textChannelID+"/messages?limit=100", map[string]string{
+		"Authorization": "Bearer " + finish.SessionToken,
+	}, nil, http.StatusOK)
+
+	var listed listMessagesResponse
+	mustParseJSON(t, listBody, &listed)
+	if len(listed.Messages) == 0 {
+		t.Fatal("expected non-empty message history")
+	}
+
+	containsCreated := false
+	for _, message := range listed.Messages {
+		if message.ID == created.Message.ID {
+			containsCreated = true
+			break
+		}
+	}
+	if !containsCreated {
+		t.Fatal("expected created message in history response")
+	}
+
+	editBody := requestJSON(t, http.MethodPatch, baseURL+"/api/channels/"+textChannelID+"/messages/"+created.Message.ID, map[string]string{
+		"Authorization": "Bearer " + finish.SessionToken,
+	}, mutateMessageRequest{ContentMarkdown: "Edited message"}, http.StatusOK)
+
+	var edited mutateMessageResponse
+	mustParseJSON(t, editBody, &edited)
+	if edited.Message.ContentMarkdown != "Edited message" {
+		t.Fatalf("unexpected edited content: got=%q", edited.Message.ContentMarkdown)
+	}
+	if edited.Message.UpdatedAt == edited.Message.CreatedAt {
+		t.Fatal("expected updatedAt to change after edit")
+	}
+}
+
+func createConnectedClientSession(t *testing.T, baseURL string) connectFinishResponse {
+	t.Helper()
+
+	adminToken := adminToken()
+	clientPublicB64, clientPrivate := generateClientKeypair(t)
+
+	inviteBody := requestJSON(t, http.MethodPost, baseURL+"/api/admin/invites", map[string]string{
+		"Authorization": "Bearer " + adminToken,
+	}, createInviteRequest{ClientPublicKey: clientPublicB64, Label: "integration-chat"}, http.StatusOK)
+
+	var invite createInviteResponse
+	mustParseJSON(t, inviteBody, &invite)
+
+	beginBody := requestJSON(t, http.MethodPost, baseURL+"/api/connect/begin", nil, connectBeginRequest{InviteID: invite.InviteID}, http.StatusOK)
+
+	var begin connectBeginResponse
+	mustParseJSON(t, beginBody, &begin)
+
+	challengeRaw, err := base64.StdEncoding.DecodeString(begin.Challenge)
+	if err != nil {
+		t.Fatalf("invalid challenge encoding: %v", err)
+	}
+
+	hash := signaturePayloadHash(challengeRaw, invite.InviteID, begin.ServerFingerprint)
+	signature := ed25519.Sign(clientPrivate, hash[:])
+
+	finishReq := connectFinishRequest{
+		InviteID:        invite.InviteID,
+		ClientPublicKey: clientPublicB64,
+		Challenge:       begin.Challenge,
+		Signature:       base64.StdEncoding.EncodeToString(signature),
+	}
+	finishReq.ClientInfo.DisplayName = "integration-client"
+
+	finishBody := requestJSON(t, http.MethodPost, baseURL+"/api/connect/finish", nil, finishReq, http.StatusOK)
+
+	var finish connectFinishResponse
+	mustParseJSON(t, finishBody, &finish)
+	return finish
 }
 
 func verifyExpectedFingerprint(expected, actual string) error {

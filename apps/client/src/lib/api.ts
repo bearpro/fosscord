@@ -78,6 +78,33 @@ export type ListInvitesResponse = {
 	invites: InviteSummary[];
 };
 
+export type MessageAuthor = {
+	displayName: string;
+	publicKey: string;
+};
+
+export type ChannelMessage = {
+	id: string;
+	channelId: string;
+	author: MessageAuthor;
+	contentMarkdown: string;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type ListMessagesResponse = {
+	messages: ChannelMessage[];
+};
+
+export type MessageMutationResponse = {
+	message: ChannelMessage;
+};
+
+export type ChannelStreamEvent = {
+	type: 'ready' | 'message.created' | 'message.updated' | string;
+	message?: ChannelMessage;
+};
+
 export type APIError = {
 	error: string;
 	message: string;
@@ -88,17 +115,21 @@ const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localh
 async function requestJSON<T>(input: {
 	baseUrl?: string;
 	path: string;
-	method?: 'GET' | 'POST';
+	method?: 'GET' | 'POST' | 'PATCH';
 	body?: unknown;
+	headers?: Record<string, string>;
 }): Promise<T> {
 	const baseUrl = (input.baseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
 	const response = await fetch(`${baseUrl}${input.path}`, {
 		method: input.method ?? 'GET',
-		headers: input.body
-			? {
-					'content-type': 'application/json'
-				}
-			: undefined,
+		headers: {
+			...(input.body
+				? {
+						'content-type': 'application/json'
+					}
+				: {}),
+			...(input.headers ?? {})
+		},
 		body: input.body ? JSON.stringify(input.body) : undefined
 	});
 
@@ -172,4 +203,84 @@ export function listInvitesByClient(
 		method: 'POST',
 		body: request
 	});
+}
+
+function authHeaders(sessionToken: string): Record<string, string> {
+	return {
+		authorization: `Bearer ${sessionToken}`
+	};
+}
+
+export function getChannelMessages(input: {
+	channelId: string;
+	sessionToken: string;
+	baseUrl?: string;
+	limit?: number;
+}): Promise<ListMessagesResponse> {
+	const limit = input.limit ?? 100;
+	return requestJSON<ListMessagesResponse>({
+		baseUrl: input.baseUrl,
+		path: `/api/channels/${encodeURIComponent(input.channelId)}/messages?limit=${encodeURIComponent(String(limit))}`,
+		headers: authHeaders(input.sessionToken)
+	});
+}
+
+export function createChannelMessage(input: {
+	channelId: string;
+	sessionToken: string;
+	contentMarkdown: string;
+	baseUrl?: string;
+}): Promise<MessageMutationResponse> {
+	return requestJSON<MessageMutationResponse>({
+		baseUrl: input.baseUrl,
+		path: `/api/channels/${encodeURIComponent(input.channelId)}/messages`,
+		method: 'POST',
+		headers: authHeaders(input.sessionToken),
+		body: {
+			contentMarkdown: input.contentMarkdown
+		}
+	});
+}
+
+export function editChannelMessage(input: {
+	channelId: string;
+	messageId: string;
+	sessionToken: string;
+	contentMarkdown: string;
+	baseUrl?: string;
+}): Promise<MessageMutationResponse> {
+	return requestJSON<MessageMutationResponse>({
+		baseUrl: input.baseUrl,
+		path: `/api/channels/${encodeURIComponent(input.channelId)}/messages/${encodeURIComponent(input.messageId)}`,
+		method: 'PATCH',
+		headers: authHeaders(input.sessionToken),
+		body: {
+			contentMarkdown: input.contentMarkdown
+		}
+	});
+}
+
+export function openChannelStream(input: {
+	channelId: string;
+	sessionToken: string;
+	baseUrl?: string;
+}): WebSocket {
+	const rawBaseURL = (input.baseUrl ?? DEFAULT_API_BASE_URL).replace(/\/$/, '');
+	let resolvedURL: URL;
+
+	if (/^https?:\/\//i.test(rawBaseURL)) {
+		resolvedURL = new URL(rawBaseURL);
+	} else if (typeof window !== 'undefined') {
+		resolvedURL = new URL(rawBaseURL || '/', window.location.origin);
+	} else {
+		throw new Error('relative websocket URL is not supported outside browser');
+	}
+
+	const protocol = resolvedURL.protocol === 'https:' ? 'wss:' : 'ws:';
+	const streamURL = new URL(
+		`${protocol}//${resolvedURL.host}/api/channels/${encodeURIComponent(input.channelId)}/stream`
+	);
+	streamURL.searchParams.set('token', input.sessionToken);
+
+	return new WebSocket(streamURL.toString());
 }

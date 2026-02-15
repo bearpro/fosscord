@@ -17,6 +17,7 @@ export type SavedServer = {
 	baseUrl: string;
 	serverFingerprint: string;
 	livekitUrl: string;
+	sessionToken?: string;
 	channels: Channel[];
 	lastConnectedAt: string;
 };

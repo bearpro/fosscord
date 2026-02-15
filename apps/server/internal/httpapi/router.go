@@ -32,7 +32,7 @@ func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
 			"tauri://localhost",
 			"https://tauri.localhost",
 		},
-		AllowedMethods: []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods: []string{"GET", "POST", "PATCH", "OPTIONS"},
 		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
 		MaxAge:         300,
 	}))
@@ -41,6 +41,12 @@ func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
 	r.Route("/api", func(api chi.Router) {
 		api.Get("/server-info", h.getServerInfo)
 		api.Get("/channels", h.getChannels)
+		api.Route("/channels/{channelID}", func(channel chi.Router) {
+			channel.Get("/messages", h.getChannelMessages)
+			channel.Post("/messages", h.postChannelMessage)
+			channel.Patch("/messages/{messageID}", h.patchChannelMessage)
+			channel.Get("/stream", h.getChannelStream)
+		})
 		api.Post("/connect/begin", h.postConnectBegin)
 		api.Post("/connect/finish", h.postConnectFinish)
 		api.Route("/admin", func(admin chi.Router) {
