@@ -37,6 +37,8 @@ Open:
 - Web app: `http://localhost:${EDGE_HTTP_PORT}` (default `8088`)
 - LiveKit: `http://localhost:7880`
 
+In web mode, LiveKit signaling is proxied through edge (`/rtc/*`), so clients can use the same origin as the app.
+
 ## Backend Data Model
 
 Backend uses `DATA_DIR` (default local dev: `apps/server/data`):
@@ -121,3 +123,4 @@ KEEP=1 make test-integration
 
 - `DB_PATH` overrides SQLite file; relative paths are resolved under `DATA_DIR`.
 - `WEB_DIST_DIR` enables backend static file serving if set.
+- `LIVEKIT_PUBLIC_URL` controls which URL backend returns to clients in `/api/server-info` and connect responses.

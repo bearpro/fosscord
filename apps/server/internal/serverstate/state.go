@@ -233,7 +233,7 @@ func (s *State) ServerInfo() ServerInfo {
 		Name:              s.serverCfg.ServerName,
 		ServerFingerprint: s.serverFingerprint,
 		ServerPublicKey:   s.serverPublicKey,
-		LiveKitURL:        s.cfg.LiveKitURL,
+		LiveKitURL:        s.cfg.LiveKitPublicURL,
 		AdminPublicKeys:   admins,
 	}
 }
@@ -445,7 +445,7 @@ func (s *State) AdminConnect(req AdminConnectRequest) (FinishResult, error) {
 		ServerID:          s.serverID,
 		ServerName:        s.serverCfg.ServerName,
 		ServerFingerprint: s.serverFingerprint,
-		LiveKitURL:        s.cfg.LiveKitURL,
+		LiveKitURL:        s.cfg.LiveKitPublicURL,
 		Channels:          channels,
 		SessionToken:      sessionToken,
 	}, nil
@@ -606,7 +606,7 @@ func (s *State) FinishConnect(req FinishRequest) (FinishResult, error) {
 		ServerID:          s.serverID,
 		ServerName:        s.serverCfg.ServerName,
 		ServerFingerprint: s.serverFingerprint,
-		LiveKitURL:        s.cfg.LiveKitURL,
+		LiveKitURL:        s.cfg.LiveKitPublicURL,
 		Channels:          channels,
 		SessionToken:      sessionToken,
 	}, nil

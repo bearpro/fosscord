@@ -12,11 +12,13 @@ type Config struct {
 	ServerPublicBaseURL       string
 	AdminToken                string
 	LiveKitURL                string
+	LiveKitPublicURL          string
 	LiveKitAPIKey             string
 	LiveKitAPISecret          string
 }
 
 func Load() Config {
+	liveKitURL := getEnv("LIVEKIT_URL", "http://localhost:7880")
 	return Config{
 		Addr:                      getEnv("SERVER_ADDR", ":8080"),
 		ServerName:                getEnv("SERVER_NAME", "Local Server"),
@@ -26,7 +28,8 @@ func Load() Config {
 		WebDistDir:                os.Getenv("WEB_DIST_DIR"),
 		ServerPublicBaseURL:       getEnv("SERVER_PUBLIC_BASE_URL", "http://localhost:8080"),
 		AdminToken:                os.Getenv("ADMIN_TOKEN"),
-		LiveKitURL:                getEnv("LIVEKIT_URL", "http://localhost:7880"),
+		LiveKitURL:                liveKitURL,
+		LiveKitPublicURL:          getEnv("LIVEKIT_PUBLIC_URL", liveKitURL),
 		LiveKitAPIKey:             os.Getenv("LIVEKIT_API_KEY"),
 		LiveKitAPISecret:          os.Getenv("LIVEKIT_API_SECRET"),
 	}
