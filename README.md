@@ -6,7 +6,8 @@ Base monorepo scaffold for a desktop client and backend server.
 
 - `apps/client`: Tauri v2 + SvelteKit (SSR disabled, static adapter)
 - `apps/server`: Go HTTP API (`chi`)
-- `deploy`: `docker-compose` and minimal LiveKit config
+- `deploy`: docker-compose files and LiveKit config
+- `tests/e2e-node`: headless Node e2e harness (Vitest)
 
 ## Prerequisites
 
@@ -87,6 +88,47 @@ In UI:
 - `/` shows server list (currently one Local Server)
 - `/server` shows backend status and server info
 
+## Integration Tests
+
+1. Create test env file:
+
+```bash
+cp deploy/.env.test.example deploy/.env.test
+```
+
+2. Run Go integration tests against dockerized backend + LiveKit:
+
+```bash
+make test-integration
+```
+
+3. Keep test environment running after tests:
+
+```bash
+KEEP=1 make test-integration
+```
+
+4. Run headless Node e2e harness:
+
+```bash
+cd tests/e2e-node
+pnpm install
+pnpm test
+```
+
+or from repo root:
+
+```bash
+pnpm test:e2e
+```
+
+## Test Commands
+
+- `make up-test`: start test compose (`deploy/docker-compose.test.yml`)
+- `make wait-test`: poll backend + LiveKit readiness
+- `make down-test`: stop and remove test compose resources
+- `make test-integration`: up -> wait -> `go test -tags=integration` -> down (unless `KEEP=1`)
+
 ## Structure
 
 ```text
@@ -96,9 +138,13 @@ apps/
     src-tauri/
   server/
     cmd/server/main.go
+    integration/
     internal/httpapi/
     internal/config/
 deploy/
   docker-compose.yml
+  docker-compose.test.yml
   livekit.yaml
+tests/
+  e2e-node/
 ```

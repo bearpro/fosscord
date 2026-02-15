@@ -1,0 +1,8 @@
+{
+  "name": "fosscord",
+  "private": true,
+  "scripts": {
+    "test:e2e": "pnpm --dir tests/e2e-node test",
+    "test:e2e:watch": "pnpm --dir tests/e2e-node test:watch"
+  }
+}
