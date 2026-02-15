@@ -52,11 +52,30 @@ export type CreateInviteByClientRequest = {
 	signature: string;
 };
 
+export type ListInvitesByClientRequest = {
+	adminPublicKey: string;
+	issuedAt: string;
+	signature: string;
+};
+
 export type CreateInviteResponse = {
 	inviteId: string;
 	serverBaseUrl: string;
 	serverFingerprint: string;
 	inviteLink: string;
+};
+
+export type InviteSummary = {
+	inviteId: string;
+	allowedClientPublicKey: string;
+	label: string;
+	createdAt: string;
+	usedAt?: string;
+	status: 'active' | 'used' | string;
+};
+
+export type ListInvitesResponse = {
+	invites: InviteSummary[];
 };
 
 export type APIError = {
@@ -138,6 +157,18 @@ export function createInviteByClient(
 	return requestJSON<CreateInviteResponse>({
 		baseUrl,
 		path: '/api/admin/invites/client-signed',
+		method: 'POST',
+		body: request
+	});
+}
+
+export function listInvitesByClient(
+	request: ListInvitesByClientRequest,
+	baseUrl?: string
+): Promise<ListInvitesResponse> {
+	return requestJSON<ListInvitesResponse>({
+		baseUrl,
+		path: '/api/admin/invites/list/client-signed',
 		method: 'POST',
 		body: request
 	});

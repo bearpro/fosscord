@@ -46,6 +46,12 @@ type createInviteByClientRequest struct {
 	Signature       string `json:"signature"`
 }
 
+type listInvitesByClientRequest struct {
+	AdminPublicKey string `json:"adminPublicKey"`
+	IssuedAt       string `json:"issuedAt"`
+	Signature      string `json:"signature"`
+}
+
 type connectBeginRequest struct {
 	InviteID string `json:"inviteId"`
 }
@@ -112,6 +118,26 @@ func (h handlers) postAdminInvitesClientSigned(w http.ResponseWriter, r *http.Re
 		Label:           req.Label,
 		IssuedAt:        req.IssuedAt,
 		Signature:       req.Signature,
+	})
+	if err != nil {
+		writeAPIError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h handlers) postAdminInvitesListClientSigned(w http.ResponseWriter, r *http.Request) {
+	var req listInvitesByClientRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeAPIError(w, &serverstate.APIError{Status: http.StatusBadRequest, Code: "invalid_json", Message: err.Error()})
+		return
+	}
+
+	result, err := h.state.ListInvitesByAdminClient(serverstate.ListInvitesByAdminClientRequest{
+		AdminPublicKey: req.AdminPublicKey,
+		IssuedAt:       req.IssuedAt,
+		Signature:      req.Signature,
 	})
 	if err != nil {
 		writeAPIError(w, err)

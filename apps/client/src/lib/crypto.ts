@@ -175,3 +175,22 @@ export async function createAdminInviteSignature(input: {
 	const signature = nacl.sign.detached(hash, secretKey);
 	return toBase64(signature);
 }
+
+export async function createAdminListInvitesSignature(input: {
+	adminPublicKey: string;
+	issuedAt: string;
+	adminPrivateKeyBase64: string;
+}): Promise<string> {
+	const secretKey = fromBase64(input.adminPrivateKeyBase64);
+	if (secretKey.length !== 64) {
+		throw new Error('admin private key must be 64 bytes base64 (Ed25519 secretKey)');
+	}
+
+	const adminPublicKeyBytes = textEncoder.encode(input.adminPublicKey);
+	const issuedAtBytes = textEncoder.encode(input.issuedAt);
+	const payload = concatBytes([adminPublicKeyBytes, issuedAtBytes]);
+
+	const hash = await sha256Bytes(payload);
+	const signature = nacl.sign.detached(hash, secretKey);
+	return toBase64(signature);
+}

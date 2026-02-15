@@ -46,6 +46,7 @@ func NewRouter(cfg config.Config, state *serverstate.State) http.Handler {
 		api.Route("/admin", func(admin chi.Router) {
 			admin.Post("/invites", h.postAdminInvites)
 			admin.Post("/invites/client-signed", h.postAdminInvitesClientSigned)
+			admin.Post("/invites/list/client-signed", h.postAdminInvitesListClientSigned)
 		})
 		api.Post("/livekit/token", h.postLiveKitToken)
 	})

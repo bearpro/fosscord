@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import { createInviteByClient, getServerInfo, type ServerInfo } from '$lib/api';
+	import { getServerInfo, type ServerInfo } from '$lib/api';
 	import AddServerModal from '$lib/components/AddServerModal.svelte';
-	import { createAdminInviteSignature, generateIdentity } from '$lib/crypto';
+	import { generateIdentity } from '$lib/crypto';
 	import { IS_SINGLE_SERVER_WEB_MODE, SINGLE_SERVER_BASE_URL } from '$lib/runtime';
 	import { loadIdentity, saveIdentity, upsertServer } from '$lib/storage';
 	import type { IdentityRecord, SavedServer } from '$lib/types';
@@ -14,16 +14,8 @@
 	let loadingIdentity = false;
 	let error = '';
 
-	let targetClientPublicKey = '';
-	let targetClientLabel = '';
-	let creatingInvite = false;
-	let createdInviteLink = '';
-	let createInviteError = '';
-	let isAdmin = false;
 	let addServerOpen = false;
 	let connectResult = '';
-
-	$: isAdmin = Boolean(identity && serverInfo?.adminPublicKeys.includes(identity.publicKey));
 
 	onMount(async () => {
 		if (!IS_SINGLE_SERVER_WEB_MODE) {
@@ -61,47 +53,6 @@
 			error = e instanceof Error ? e.message : 'Failed to generate identity';
 		} finally {
 			loadingIdentity = false;
-		}
-	}
-
-	async function handleCreateInvite() {
-		if (!identity) {
-			createInviteError = 'Generate identity first';
-			return;
-		}
-		if (!targetClientPublicKey.trim()) {
-			createInviteError = 'Target client public key is required';
-			return;
-		}
-
-		creatingInvite = true;
-		createInviteError = '';
-		createdInviteLink = '';
-		try {
-			const issuedAt = new Date().toISOString();
-			const signature = await createAdminInviteSignature({
-				adminPublicKey: identity.publicKey,
-				clientPublicKey: targetClientPublicKey.trim(),
-				issuedAt,
-				adminPrivateKeyBase64: identity.privateKey
-			});
-
-			const result = await createInviteByClient(
-				{
-					adminPublicKey: identity.publicKey,
-					clientPublicKey: targetClientPublicKey.trim(),
-					label: targetClientLabel.trim(),
-					issuedAt,
-					signature
-				},
-				SINGLE_SERVER_BASE_URL
-			);
-
-			createdInviteLink = result.inviteLink;
-		} catch (e) {
-			createInviteError = e instanceof Error ? e.message : 'Failed to create invite';
-		} finally {
-			creatingInvite = false;
 		}
 	}
 
@@ -150,35 +101,6 @@
 		</section>
 	{/if}
 
-	{#if isAdmin && identity}
-		<section class="card">
-			<h2>Administrator Actions</h2>
-			<p>You are listed as a server administrator.</p>
-			<label for="target-key">Add user by public key</label>
-			<textarea
-				id="target-key"
-				bind:value={targetClientPublicKey}
-				rows="5"
-				placeholder="Base64 Ed25519 public key"
-			></textarea>
-			<input bind:value={targetClientLabel} placeholder="Optional label" />
-			<button
-				on:click={handleCreateInvite}
-				disabled={creatingInvite || !targetClientPublicKey.trim()}
-			>
-				{creatingInvite ? 'Creating invite...' : 'Add user'}
-			</button>
-
-			{#if createInviteError}
-				<p class="error">{createInviteError}</p>
-			{/if}
-			{#if createdInviteLink}
-				<p>Invite link:</p>
-				<code class="pubkey">{createdInviteLink}</code>
-			{/if}
-		</section>
-	{/if}
-
 	{#if identity}
 		<AddServerModal
 			open={addServerOpen}
@@ -209,15 +131,6 @@
 		border-radius: 8px;
 		background: #f1f5f9;
 		word-break: break-all;
-	}
-
-	textarea,
-	input {
-		width: 100%;
-		box-sizing: border-box;
-		padding: 8px;
-		margin: 8px 0;
-		font-family: inherit;
 	}
 
 	button {

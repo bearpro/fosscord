@@ -71,6 +71,25 @@ type CreateInviteByAdminClientRequest struct {
 	Signature       string
 }
 
+type ListInvitesByAdminClientRequest struct {
+	AdminPublicKey string
+	IssuedAt       string
+	Signature      string
+}
+
+type InviteSummary struct {
+	InviteID               string  `json:"inviteId"`
+	AllowedClientPublicKey string  `json:"allowedClientPublicKey"`
+	Label                  string  `json:"label"`
+	CreatedAt              string  `json:"createdAt"`
+	UsedAt                 *string `json:"usedAt,omitempty"`
+	Status                 string  `json:"status"`
+}
+
+type ListInvitesResult struct {
+	Invites []InviteSummary `json:"invites"`
+}
+
 type BeginResult struct {
 	ServerPublicKey   string    `json:"serverPublicKey"`
 	ServerFingerprint string    `json:"serverFingerprint"`
@@ -274,6 +293,92 @@ func (s *State) CreateInviteByAdminClient(req CreateInviteByAdminClientRequest) 
 	return s.createInviteLocked(req.ClientPublicKey, req.Label)
 }
 
+func (s *State) ListInvitesByAdminClient(req ListInvitesByAdminClientRequest) (ListInvitesResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	req.AdminPublicKey = strings.TrimSpace(req.AdminPublicKey)
+	req.IssuedAt = strings.TrimSpace(req.IssuedAt)
+	req.Signature = strings.TrimSpace(req.Signature)
+
+	if req.AdminPublicKey == "" || req.IssuedAt == "" || req.Signature == "" {
+		return ListInvitesResult{}, newAPIError(400, "invalid_request", "adminPublicKey, issuedAt and signature are required")
+	}
+
+	adminKey, err := decodePublicKey(req.AdminPublicKey)
+	if err != nil {
+		return ListInvitesResult{}, newAPIError(400, "invalid_admin_public_key", "adminPublicKey must be base64(ed25519 public key)")
+	}
+	if !s.isAdminPublicKeyLocked(req.AdminPublicKey) {
+		return ListInvitesResult{}, newAPIError(403, "admin_forbidden", "client is not an administrator")
+	}
+
+	issuedAt, err := time.Parse(time.RFC3339, req.IssuedAt)
+	if err != nil {
+		return ListInvitesResult{}, newAPIError(400, "invalid_issued_at", "issuedAt must be RFC3339")
+	}
+	if time.Since(issuedAt.UTC()) > adminRequestMaxSkew || time.Until(issuedAt.UTC()) > adminRequestMaxSkew {
+		return ListInvitesResult{}, newAPIError(401, "stale_request", "issuedAt is outside allowed skew")
+	}
+
+	signature, err := decodeSignature(req.Signature)
+	if err != nil {
+		return ListInvitesResult{}, newAPIError(400, "invalid_signature", "signature must be base64(ed25519 signature)")
+	}
+
+	hash := AdminListInvitesPayloadHash(req.AdminPublicKey, req.IssuedAt)
+	if !ed25519.Verify(adminKey, hash[:], signature) {
+		return ListInvitesResult{}, newAPIError(401, "invalid_signature", "signature verification failed")
+	}
+
+	rows, err := s.db.Query(`SELECT id, allowed_client_public_key, label, created_at, used_at FROM invites ORDER BY created_at DESC`)
+	if err != nil {
+		return ListInvitesResult{}, fmt.Errorf("query invites list: %w", err)
+	}
+	defer rows.Close()
+
+	result := ListInvitesResult{
+		Invites: []InviteSummary{},
+	}
+
+	for rows.Next() {
+		var (
+			inviteID         string
+			allowedClientKey string
+			label            string
+			createdAt        string
+			usedAt           sql.NullString
+			usedAtPointer    *string
+			status           = "active"
+		)
+
+		if err := rows.Scan(&inviteID, &allowedClientKey, &label, &createdAt, &usedAt); err != nil {
+			return ListInvitesResult{}, fmt.Errorf("scan invites list row: %w", err)
+		}
+
+		if usedAt.Valid {
+			usedAtCopy := usedAt.String
+			usedAtPointer = &usedAtCopy
+			status = "used"
+		}
+
+		result.Invites = append(result.Invites, InviteSummary{
+			InviteID:               inviteID,
+			AllowedClientPublicKey: allowedClientKey,
+			Label:                  label,
+			CreatedAt:              createdAt,
+			UsedAt:                 usedAtPointer,
+			Status:                 status,
+		})
+	}
+
+	if err := rows.Err(); err != nil {
+		return ListInvitesResult{}, fmt.Errorf("iterate invites list rows: %w", err)
+	}
+
+	return result, nil
+}
+
 func (s *State) createInviteLocked(clientPublicKeyB64, label string) (CreateInviteResult, error) {
 	inviteID, err := randomHex(16)
 	if err != nil {
@@ -472,6 +577,13 @@ func AdminInvitePayloadHash(adminPublicKey, clientPublicKey, issuedAt string) [3
 	payload := make([]byte, 0, len(adminPublicKey)+len(clientPublicKey)+len(issuedAt))
 	payload = append(payload, []byte(adminPublicKey)...)
 	payload = append(payload, []byte(clientPublicKey)...)
+	payload = append(payload, []byte(issuedAt)...)
+	return sha256.Sum256(payload)
+}
+
+func AdminListInvitesPayloadHash(adminPublicKey, issuedAt string) [32]byte {
+	payload := make([]byte, 0, len(adminPublicKey)+len(issuedAt))
+	payload = append(payload, []byte(adminPublicKey)...)
 	payload = append(payload, []byte(issuedAt)...)
 	return sha256.Sum256(payload)
 }
